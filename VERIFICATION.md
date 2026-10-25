@@ -3,10 +3,11 @@
 日期：2026-10-25；執行環境：Node.js 22.16.0（部署設定為 24.x）。
 
 已實際執行：
-- npm test：75 tests，75 pass，0 fail。
+- npm test：80 tests，80 pass，0 fail。
 - npm run build / check：JavaScript 語法檢查通過。
 - 原有 56 項本地測試保留並改為非同步 Store 介面。
-- 新增 Vercel 路由、已解析的 body、2 MB 限制、遠端資料庫必填、Cron GET 驗證與停用保護、固定排程欄位。
+- 新增 Vercel 路由、已解析的 body、4 MB 程式內限制、遠端資料庫必填、Cron GET 驗證與停用保護、固定排程欄位。
+- 2.3.0：`Automation-Aggregation` 改為診斷資訊，不再阻擋匯入；支援部分成功匯入，壞資料以 rejected/warnings 回報，其他有效資料照常寫入。
 - 兩個獨立 createApp 連到同一本地測試 SQLite：登入狀態、數據可共享，日期發送鎖只允許一次模擬推播。
 - 登入限制跨 instance 保存；失敗批次 rollback；重傳不加總。
 

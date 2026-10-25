@@ -95,14 +95,15 @@ function getMetrics(payload) {
   return metrics;
 }
 export function parseHealth(payload) {
-  const records = new Map(); const warnings = []; const warningSet = new Set(); const present = new Set();
+  const records = new Map(); const warnings = []; const warningSet = new Set(); const present = new Set(); let rejected = 0;
   const warn = message => { if (!warningSet.has(message)) { warningSet.add(message); warnings.push(message); } };
   for (const metric of getMetrics(payload)) {
-    if (!object(metric) || typeof metric.name !== 'string') throw new InputError('無效指標物件');
-    if (!Object.hasOwn(METRICS, metric.name)) { warn(`略過不支援指標：${metric.name.slice(0,80)}`); continue; }
+    if (!object(metric) || typeof metric.name !== 'string') { rejected++; warn('略過無效指標物件'); continue; }
+    const metricName = metric.name.slice(0,80);
+    if (!Object.hasOwn(METRICS, metric.name)) { warn(`略過不支援指標：${metricName}`); continue; }
     present.add(metric.name);
-    if (!Array.isArray(metric.data)) throw new InputError(`${metric.name}.data 必須是陣列`);
-    if (!metric.data.length) warn(`${metric.name} 沒有資料；既有數值不會清空`);
+    if (!Array.isArray(metric.data)) { rejected++; warn(`${metricName}.data 必須是陣列；已略過此指標`); continue; }
+    if (!metric.data.length) warn(`${metricName} 沒有資料；既有數值不會清空`);
     for (let i = 0; i < metric.data.length; i++) {
       try {
         const row = metric.data[i]; if (!object(row)) throw new InputError('紀錄必須是物件');
@@ -112,14 +113,17 @@ export function parseHealth(payload) {
         const source = typeof rawSource === 'string' ? rawSource.trim().slice(0,300) : Array.isArray(rawSource) ? rawSource.filter(s=>typeof s==='string').sort().join('、').slice(0,300) : '';
         const item = { date, metric: metric.name, value, source: source || null };
         const key = `${date}:${metric.name}`; const old = records.get(key);
-        if (old && (old.value !== value || old.source !== item.source)) throw new InputError('同日期出現不同彙總或多個來源；不能直接相加，請匯出整合後每日彙總');
+        if (old && (old.value !== value || old.source !== item.source)) throw new InputError('同日期出現不同彙總或多個來源；不能直接相加，已保留先收到的每日彙總');
         records.set(key,item);
-      } catch (e) { throw new InputError(`${metric.name} 第 ${i+1} 筆：${e.message}`); }
+      } catch (e) {
+        rejected++;
+        warn(`${metric.name} 第 ${i+1} 筆已略過：${e instanceof Error ? e.message : '無法解析'}`);
+      }
     }
   }
   if (!present.has('step_count')) warn('這次未包含步數；既有步數不會被當作 0 或清空');
   if (!records.size) throw new InputError('沒有可匯入的每日資料。'+warnings.join('；'));
-  return { records: [...records.values()], warnings };
+  return { records: [...records.values()], warnings, rejected };
 }
 export function metricText(name, value) {
   if (value === null || value === undefined) return '未提供';

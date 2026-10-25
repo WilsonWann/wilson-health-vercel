@@ -1,4 +1,4 @@
-# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.1.0）
+# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.3.0）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
 **這是原始碼，不代表已經建立 Vercel 服務。沒有包含密碼、LINE Token、真實健康 JSON 或資料庫。**
@@ -55,7 +55,9 @@ Range: Previous 7 Days
 
 請選取 Step Count、Sleep Analysis、Heart Rate、Resting Heart Rate、Active Energy、Apple Exercise Time 等實際需要的項目。
 移除 1.0 的 `OAI-Sites-Authorization`。第一次先解鎖 iPhone 手動匯出，確認新站數據再啟用每日自動化。
-每批 JSON 限 2 MB；過大時縮短天數或減少指標。本版只接「每日彙總」，不把多來源/小時紀錄誤加成每日總數。
+每批 JSON 的程式內上限為 4 MB；Vercel 平台仍有自己的 request body 上限，過大時應縮短天數或拆分指標。本版只接「每日彙總」或從台北 00:00 起算的今日暫時彙總，不把一般逐筆/小時紀錄誤加成每日總數。
+`Automation-Aggregation` header 僅作診斷，不再作為拒絕條件；真正是否可匯入由 JSON 內容判斷。
+單一指標或單筆紀錄格式不支援時，其他有效資料仍會寫入，回應中的 `rejected` 與 `warnings` 會說明被略過項目；只有整包完全沒有可用每日資料時才回 422。
 缺步數會留下警告；未提供不等於 0；小數保留在資料庫，展示時才取整數。
 
 **iPhone 上傳與 LINE 推播是兩個不同排程。** Vercel 不會讀取手機內的 HealthKit。手機上傳時間仍受 iOS 背景執行、鎖定和權限影響，不能保證某個分鐘收到全部資料。

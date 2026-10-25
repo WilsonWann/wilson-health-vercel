@@ -19,8 +19,10 @@ test('partial-day sample that does not start at midnight is rejected',()=>{const
 test('cross-day interval rejected',()=>{const p=daily();p.data.data[0].end='2026-10-26 23:59:59 +0800';assert.throws(()=>parseHealth(p));});
 test('invalid calendar date rejected',()=>{const p=daily();p.data.data[0].start='2026-02-30';assert.throws(()=>parseHealth(p));});
 test('identical duplicates deduplicated',()=>{const p=daily();p.data.data.push(record());assert.equal(parseHealth(p).records.length,1);});
-test('conflicting daily records not added',()=>{const p=daily();p.data.data.push({...record(),qty:99});assert.throws(()=>parseHealth(p));});
-test('overlapping device totals rejected',()=>{const p=daily();p.data.data.push({...record(),sources:'another device'});assert.throws(()=>parseHealth(p));});
+test('conflicting daily records keep the first valid summary and warn',()=>{const p=daily();p.data.data.push({...record(),qty:99});const r=parseHealth(p);assert.equal(r.records.length,1);assert.equal(r.records[0].value,1234.75);assert.equal(r.rejected,1);assert.match(r.warnings.join(),/已略過/);});
+test('overlapping device totals keep one daily summary and warn',()=>{const p=daily();p.data.data.push({...record(),sources:'another device'});const r=parseHealth(p);assert.equal(r.records.length,1);assert.equal(r.rejected,1);assert.match(r.warnings.join(),/不能直接相加/);});
+test('one invalid supported metric does not discard other valid metrics',()=>{const r=parseHealth({data:{metrics:[daily().data,{name:'sleep_analysis',units:'hr',data:[{date:'2026-10-24',totalSleep:'bad'}]}]}});assert.equal(r.records.length,1);assert.equal(r.records[0].metric,'step_count');assert.equal(r.rejected,1);assert.match(r.warnings.join(),/sleep_analysis 第 1 筆已略過/);});
+test('invalid data shape for one metric becomes warning when another metric is valid',()=>{const r=parseHealth({data:{metrics:[daily().data,{name:'active_energy',units:'kcal',data:null}]}});assert.equal(r.records.length,1);assert.equal(r.rejected,1);assert.match(r.warnings.join(),/active_energy\.data 必須是陣列/);});
 test('aggregate heart rate Avg accepted',()=>assert.equal(parseHealth({name:'heart_rate',units:'bpm',data:[{date:'2026-10-24',Avg:70.25}]}).records[0].value,70.25));
 test('sleep total not inBed or stage sum',()=>assert.equal(parseHealth({name:'sleep_analysis',units:'hr',data:[{date:'2026-10-24',totalSleep:7.25,inBed:9,deep:1}]}).records[0].value,7.25));
 test('raw sleep segments rejected',()=>assert.throws(()=>parseHealth({name:'sleep_analysis',units:'hr',data:[{startDate:'2026-10-24 00:00:00 +0800',qty:2}]})));

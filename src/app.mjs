@@ -45,8 +45,12 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new InputError('無效 JSON',400);}
   }
   function result(res,status,value,headers={}){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8',...headers});res.end(JSON.stringify(value));}
-  async function doImport(payload){
-    try{return await store.import(parseHealth(payload),clock().toISOString());}
+  async function doImport(payload,{aggregation}={}){
+    try{
+      const parsed=parseHealth(payload);
+      if(aggregation)parsed.aggregation=String(aggregation).slice(0,80);
+      return await store.import(parsed,clock().toISOString());
+    }
     catch(e){if(e instanceof InputError)await store.event('import_error',e.message,clock().toISOString());throw e;}
   }
   async function verifyLine(){
@@ -89,7 +93,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.2.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.3.0-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -109,10 +113,9 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
       if(path==='/api/ingest'&&method==='POST'){
         if(!eq(req.headers.authorization,`Bearer ${config.ingestToken}`))throw new InputError('匯入金鑰錯誤',401);
         const aggregation=req.headers['automation-aggregation'];
-        if(aggregation&&!/^(day|days)$/i.test(aggregation)){await store.event('ingest_rejected','Automation Aggregation 需為 Days',clock().toISOString());throw new InputError('Automation Aggregation 需為 Days');}
         let payload;
         try{payload=await jsonBody(req);}catch(e){if(e instanceof InputError)await store.event('ingest_rejected',e.message,clock().toISOString());throw e;}
-        return result(res,200,await doImport(payload));
+        return result(res,200,await doImport(payload,{aggregation}));
       }
       if(path==='/api/cron'&&method==='GET'){
         if(!eq(req.headers.authorization,`Bearer ${config.cronToken}`))throw new InputError('排程金鑰錯誤',401);

@@ -61,7 +61,7 @@ export class Store {
       WHERE samples.value != excluded.value OR samples.source IS NOT excluded.source`;
     const results=await this.client.batch(parsed.records.map(r=>({sql,args:[r.date,r.metric,r.value,r.source,now]})),'write');
     const changed=results.reduce((sum,r)=>sum+Number(r.rowsAffected),0);
-    const result={received:parsed.records.length,changed,unchanged:parsed.records.length-changed,warnings:parsed.warnings};
+    const result={received:parsed.records.length,changed,unchanged:parsed.records.length-changed,rejected:parsed.rejected||0,warnings:parsed.warnings,aggregation:parsed.aggregation||null};
     await this.event('import',JSON.stringify(result),now);return result;
   }
   async samples(from='0000-01-01',to='9999-12-31'){return this.db.prepare('SELECT * FROM samples WHERE date BETWEEN ? AND ? ORDER BY date,metric').all(from,to);}

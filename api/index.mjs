@@ -15,8 +15,9 @@ export default async function handler(req,res){
     req.url=normalizeRoute(req.url);
     if(!pending)pending=createApp(configFromEnv()).catch(e=>{pending=undefined;throw e;});
     const app=await pending;return await app.handler(req,res);
-  }catch{
+  }catch(e){
+    console.error('[startup_error]', e instanceof Error ? e.message : String(e));
     if(!res.headersSent)res.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});
-    res.end(JSON.stringify({error:'服務尚未就緒。請檢查 Vercel 的環境變數、Turso 連線與部署紀錄。'}));
+    res.end(JSON.stringify({error:'服務尚未就緒。請查看 Vercel Logs 的 startup_error。',code:'STARTUP_FAILED'}));
   }
 }

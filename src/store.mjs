@@ -4,7 +4,7 @@ const schema=[
   `CREATE TABLE IF NOT EXISTS samples(date TEXT NOT NULL,metric TEXT NOT NULL,value REAL NOT NULL,source TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(date,metric)) STRICT`,
   `CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),display_name TEXT NOT NULL DEFAULT 'Wilson',auto_send INTEGER NOT NULL DEFAULT 0,report_time TEXT NOT NULL DEFAULT '09:00',line_verified INTEGER NOT NULL DEFAULT 0,credentials TEXT) STRICT`,
   `INSERT OR IGNORE INTO settings(id) VALUES(1)`,
-  `CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL,role TEXT NOT NULL DEFAULT 'admin') STRICT`,
+  `CREATE TABLE IF NOT EXISTS sessions_v2(hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL,role TEXT NOT NULL) STRICT`,
   `CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,retry_key TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,attempt_at TEXT NOT NULL,error TEXT) STRICT`,
   `CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,event TEXT NOT NULL,message TEXT NOT NULL,created_at TEXT NOT NULL) STRICT`,
   `CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY,count INTEGER NOT NULL,until_ms INTEGER NOT NULL) STRICT`
@@ -25,8 +25,6 @@ export async function openStore(config,{client}={}) {
     }
   }
   await client.batch(schema,'write');
-  const sessionCols=(await client.execute('PRAGMA table_info(sessions)')).rows.map(r=>String(r.name));
-  if(!sessionCols.includes('role'))await client.execute("ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
   const store=new Store(client,config.key);return store;
 }
 export class Store {

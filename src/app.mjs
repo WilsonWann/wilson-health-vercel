@@ -39,12 +39,11 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
   if(!USERNAME_RE.test(guestUsername))throw new Error('GUEST_USERNAME 需為 3–50 個英數、點、底線或連字號');
   if(adminUsername.toLowerCase()===guestUsername.toLowerCase())throw new Error('管理者與 Guest 帳號不得相同');
   if(typeof config.password!=='string'||config.password.length<16)throw new Error('ADMIN_PASSWORD 至少 16 字元');
-  if(config.guestPassword && config.guestPassword.length<16)throw new Error('GUEST_PASSWORD 至少 16 字元');
   if(!/^[a-f0-9]{64}$/i.test(config.key||''))throw new Error('APP_KEY 需為 64 位十六進位字串');
   for(const k of ['ingestToken','cronToken'])if(typeof config[k]!=='string'||config[k].length<32)throw new Error(k+' 至少 32 字元');
   if(config.production && !/^https:\/\/[^/]+$/.test(config.origin||''))throw new Error('正式環境需設定 HTTPS APP_ORIGIN');
   const store=await openStore(config,{client});
-  const adminSalt=randomBytes(16),guestSalt=randomBytes(16),adminHash=scryptSync(config.password,adminSalt,32),guestHash=scryptSync(config.guestPassword||randomBytes(24).toString('hex'),guestSalt,32);
+  const adminSalt=randomBytes(16),guestSalt=randomBytes(16),adminHash=scryptSync(config.password,adminSalt,32),guestHash=scryptSync(config.guestPassword??'',guestSalt,32);
   async function credentials(){const c=await store.credentials();if(!c)throw new InputError('請先儲存 LINE 設定',409);return c;}
   async function publicSettings(){
     const s=await store.settings(),c=await store.credentials();return {displayName:s.display_name,autoSend:!!s.auto_send,reportTime:s.report_time,lineConfigured:!!c,lineVerified:!!s.line_verified,userId:c?.userId||'',ingestPath:'/api/ingest',fixedReportTime:config.vercel?'09:00':null};
@@ -54,7 +53,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
   async function session(req){
     const value=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('wh2='))?.slice(4);
     if(!value)return null;
-    const s=await store.db.prepare('SELECT * FROM sessions WHERE hash=? AND expires>?').get(hash(value),clock().getTime());return s||null;
+    const s=await store.db.prepare('SELECT * FROM sessions_v2 WHERE hash=? AND expires>?').get(hash(value),clock().getTime());return s||null;
   }
   async function requireSession(req,write=false){
     const s=await session(req);if(!s)throw new InputError('請先登入',401);
@@ -128,7 +127,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.6.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.6.2-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -137,15 +136,15 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         const b=await jsonBody(req),username=typeof b?.username==='string'?b.username.trim():'',password=typeof b?.password==='string'?b.password:'';
         if(username.length>100||password.length>1024)throw new InputError('帳號或密碼格式錯誤',400);
         const adminPass=timingSafeEqual(scryptSync(password,adminSalt,32),adminHash),guestPass=timingSafeEqual(scryptSync(password,guestSalt,32),guestHash);
-        const role=username.toLowerCase()===adminUsername.toLowerCase()&&adminPass?'admin':config.guestPassword&&username.toLowerCase()===guestUsername.toLowerCase()&&guestPass?'guest':null;
+        const role=username.toLowerCase()===adminUsername.toLowerCase()&&adminPass?'admin':username.toLowerCase()===guestUsername.toLowerCase()&&guestPass?'guest':null;
         if(!role)throw new InputError('帳號或密碼錯誤',401);
-        await store.clearLoginAttempts(ipKey);await store.db.prepare('DELETE FROM sessions WHERE expires<?').run(now);
+        await store.clearLoginAttempts(ipKey);await store.db.prepare('DELETE FROM sessions_v2 WHERE expires<?').run(now);
         const token=randomBytes(32).toString('hex'),csrf=randomBytes(24).toString('hex');
-        await store.db.prepare('INSERT INTO sessions(hash,csrf,expires,role) VALUES(?,?,?,?)').run(hash(token),csrf,now+SESSION_TTL,role);
+        await store.db.prepare('INSERT INTO sessions_v2(hash,csrf,expires,role) VALUES(?,?,?,?)').run(hash(token),csrf,now+SESSION_TTL,role);
         return result(res,200,{ok:true,csrf,role,username:role==='guest'?guestUsername:adminUsername},{'Set-Cookie':`wh2=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${config.production?'; Secure':''}`});
       }
       if(path==='/api/session'&&method==='GET'){const s=await session(req);return result(res,200,s?{authenticated:true,csrf:s.csrf,role:s.role||'admin',username:(s.role||'admin')==='guest'?guestUsername:adminUsername}:{authenticated:false});}
-      if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
+      if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions_v2 WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
       if(path==='/api/ingest'&&method==='POST'){
         if(!eq(req.headers.authorization,`Bearer ${config.ingestToken}`))throw new InputError('匯入金鑰錯誤',401);
         const aggregation=req.headers['automation-aggregation'];

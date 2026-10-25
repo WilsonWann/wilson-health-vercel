@@ -24,8 +24,13 @@ test('selected metric card has visible focus and selected styles',()=>{
   assert.match(css,/\.metric-card\.selected/);
 });
 
-test('login uses username and password fields',()=>{
-  assert.match(html,/id="username"/);assert.match(html,/autocomplete="username"/);assert.match(app,/username:\$\('#username'\)\.value/);
+test('login supports passwordless guest submission without native browser blocking',()=>{
+  assert.match(html,/id="loginForm" novalidate/);
+  assert.match(html,/id="username"/);assert.match(html,/autocomplete="username"/);
+  const passwordTag=html.match(/<input id="password"[^>]*>/)?.[0]||'';
+  assert.ok(passwordTag);assert.doesNotMatch(passwordTag,/\srequired(?:\s|=|>)/);
+  assert.match(app,/loginForm\.noValidate=true/);assert.match(app,/passwordInput\.required=false/);
+  assert.match(app,/if\(!username\)/);assert.match(app,/username,password/);
 });
 
 test('guest UI disables private admin panels and advertises mock data',()=>{

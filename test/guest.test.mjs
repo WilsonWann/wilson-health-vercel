@@ -57,12 +57,30 @@ test('guest account is read-only and can only see mock health data',async t=>{
   assert.equal(adminState.body.role,'admin');assert.equal(adminState.body.mock,false);assert.equal(adminState.body.rows.find(r=>r.metric==='step_count').value,99999.5);
 });
 
-test('existing pre-2.6 sessions table is migrated with an admin role column',async()=>{
+test('existing pre-2.6 sessions table is left untouched and sessions_v2 is created',async()=>{
   const { localClient }=await import('../src/local-client.mjs');
   const { openStore }=await import('../src/store.mjs');
   const client=localClient(':memory:');
   await client.execute('CREATE TABLE sessions(hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL) STRICT');
   const store=await openStore(config,{client});
-  try{const cols=(await client.execute('PRAGMA table_info(sessions)')).rows.map(r=>String(r.name));assert.ok(cols.includes('role'));}
-  finally{store.close();}
+  try{
+    const oldCols=(await client.execute('PRAGMA table_info(sessions)')).rows.map(r=>String(r.name));
+    const newCols=(await client.execute('PRAGMA table_info(sessions_v2)')).rows.map(r=>String(r.name));
+    assert.deepEqual(oldCols,['hash','csrf','expires']);
+    assert.ok(newCols.includes('role'));
+  } finally{store.close();}
+});
+
+
+
+test('guest can log in with an empty password',async t=>{
+  const cfg={...config,guestPassword:''};
+  const app=await createApp(cfg,{clock:()=>new Date('2026-10-25T07:00:00Z')});
+  await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
+  t.after(()=>app.close());
+  const base='http://127.0.0.1:'+app.server.address().port;
+  const r=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:base},body:JSON.stringify({username:'guest',password:''})});
+  const body=await r.json();
+  assert.equal(r.status,200);
+  assert.equal(body.role,'guest');
 });

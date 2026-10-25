@@ -1,4 +1,4 @@
-# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.6.0）
+# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.6.1）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
 **這是原始碼，不代表已經建立 Vercel 服務。沒有包含密碼、LINE Token、真實健康 JSON 或資料庫。**
@@ -20,7 +20,7 @@
 | ADMIN_USERNAME | 管理者登入帳號；未設定時預設 `admin` |
 | ADMIN_PASSWORD | 沿用現有 2.0 的管理密碼，至少 16 字元 |
 | GUEST_USERNAME | Guest 展示帳號；未設定時預設 `guest` |
-| GUEST_PASSWORD | Guest 密碼，至少 16 字元；設定後才啟用 Guest 登入 |
+| GUEST_PASSWORD | Guest 展示密碼，可留空；留空時以 Guest 帳號＋空密碼登入 |
 | APP_KEY | 沿用現有 2.0 的 64 位 hex 金鑰；儲存 LINE 設定後不得隨意更換 |
 | INGEST_TOKEN | 沿用/設定至少 32 字元的手機匯入金鑰；不同於 LINE Token |
 | CRON_SECRET | 至少 32 字元的獨立排程金鑰 |
@@ -127,13 +127,28 @@ restore 只處理健康數值，不搬移舊登入、LINE 設定或發送歷史�
 
 ## 2.6.0 帳號與 Guest 展示模式
 
-登入入口改為「帳號＋密碼」。管理者帳號由 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 控制；Guest 帳號由 `GUEST_USERNAME` / `GUEST_PASSWORD` 控制。既有部署只需新增 Guest 密碼（以及需要時自訂帳號名稱），原本的 ADMIN_PASSWORD、APP_KEY、Turso 與 LINE 設定都可沿用。
+登入入口為「帳號＋密碼」。管理者帳號由 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 控制；Guest 帳號由 `GUEST_USERNAME` 控制，`GUEST_PASSWORD` 可省略或留空。原本的 ADMIN_PASSWORD、APP_KEY、Turso 與 LINE 設定都可沿用。
 
 Guest 是真正的後端唯讀角色，不只是前端把按鈕反灰：
 - `/api/state` 只回傳獨立生成的 Mock Data，不查詢或回傳私人健康資料。
 - `/api/report/preview` 只使用 Mock Data。
 - 備份、手動匯入、LINE 設定/驗證/發送、排程與私人操作紀錄均禁止 Guest 存取，直接回 403。
 - 前端仍將私人區塊反灰 disabled，方便展示網站結構但不顯示隱私內容。
-- 既有 `sessions` table 會自動新增 `role` 欄位，舊 session 預設視為 admin；不需要手動修改 Turso schema。
+- 2.6.1 起不再修改既有 `sessions` table；改用新的 `sessions_v2` 儲存角色型 session，避免部署時做 ALTER TABLE。升級後舊登入 session 會失效一次，但健康資料與設定不受影響。
 
-若本機首次使用 `npm run setup`，會同時產生 admin 與 guest 的首次密碼；正式 Vercel 請自行在 Environment Variables 設定。
+若本機首次使用 `npm run setup`，會產生 admin 密碼；Guest 預設密碼留空，正式 Vercel 可自行設定或維持空白。
+
+
+## 2.6.1 啟動可靠性修正
+
+- 不再在冷啟動執行 `ALTER TABLE sessions`。
+- 使用獨立 `sessions_v2` table 儲存 admin / guest session。
+- Vercel 啟動失敗會在 Runtime Logs 輸出 `[startup_error] <原因>`；前端只顯示安全的 `STARTUP_FAILED`。
+
+
+## 2.6.3 login UI compatibility
+
+- Login form disables native HTML constraint validation (`novalidate`).
+- Guest can submit an empty password without browser-level blocking.
+- Username presence is validated by application code; credentials are still verified server-side.
+- Static CSS/JS URLs include the 2.6.3 version query to make deployed version changes obvious and reduce stale-asset confusion.

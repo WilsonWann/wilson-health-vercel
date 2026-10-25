@@ -2,6 +2,8 @@ const $=s=>document.querySelector(s);
 let csrf='',state=null,preview='',selectedMetric='step_count',role='admin';
 const metadata={step_count:['步數','步',0],sleep_analysis:['睡眠','小時',2],heart_rate:['平均心率','bpm',1],resting_heart_rate:['靜止心率','bpm',0],active_energy:['活動熱量','kcal',1],apple_exercise_time:['運動時間','分鐘',0],height:['身高','cm',1],'weight_&_body_mass':['體重','kg',1],body_mass_index:['BMI','',1]};
 const bodyMetrics=new Set(['height','weight_&_body_mass','body_mass_index']);
+const loginForm=$('#loginForm'),usernameInput=$('#username'),passwordInput=$('#password');
+loginForm.noValidate=true;usernameInput.required=false;passwordInput.required=false;
 function fmtTime(s){if(!s)return '未提供';const d=new Date(s);return new Date(d.getTime()+8*3600000).toISOString().slice(0,19).replace('T',' ')+'（UTC+8）';}
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function notify(text,error=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').classList.toggle('error',error);}
@@ -82,7 +84,7 @@ async function load(resetSettings=false){
   if(!state.events.length)$('#events').append(el('p',role==='guest'?'Guest 模式不提供私人操作紀錄。':'尚無操作紀錄','muted'));
 }
 async function enter(){ $('#login').hidden=true;$('#workspace').hidden=false;await load(true);applyRole(); }
-$('#loginForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const r=await api('/api/login',{username:$('#username').value,password:$('#password').value});csrf=r.csrf;role=r.role||'admin';$('#password').value='';$('#loginError').textContent='';await enter();}catch(err){$('#loginError').textContent=err.message;}finally{b.disabled=false;}});
+loginForm.addEventListener('submit',async e=>{e.preventDefault();const username=usernameInput.value.trim(),password=passwordInput.value;if(!username){$('#loginError').textContent='請輸入帳號';usernameInput.focus();return;}const b=e.submitter||loginForm.querySelector('button[type="submit"]');b.disabled=true;try{const r=await api('/api/login',{username,password});csrf=r.csrf;role=r.role||'admin';passwordInput.value='';$('#loginError').textContent='';await enter();}catch(err){$('#loginError').textContent=err.message;}finally{b.disabled=false;}});
 $('#logout').onclick=()=>busy($('#logout'),async()=>{await api('/api/logout',{});location.reload();});
 $('#refresh').onclick=()=>busy($('#refresh'),()=>load(false));$('#reportDate').onchange=()=>renderDay().catch(e=>notify(e.message,true));
 $('#jsonFile').onchange=async()=>{const f=$('#jsonFile').files[0];if(!f)return;if(f.size>4*1024*1024)return notify('檔案超過 4 MB',true);$('#jsonText').value=await f.text();};

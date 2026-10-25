@@ -1,6 +1,6 @@
 {
   "name": "wilson-health-v2",
-  "version": "2.6.0",
+  "version": "2.6.3",
   "private": true,
   "type": "module",
   "description": "Vercel health dashboard with durable Turso libSQL storage",

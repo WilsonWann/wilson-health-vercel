@@ -43,18 +43,22 @@ function bucket(row) {
   if (isDate(label)) { day = label; start = Date.parse(label+'T00:00:00+08:00'); }
   else {
     start = timestamp(label); const local = taipeiParts(start);
-    if (!local.endsWith('00:00:00') || start % 1000 !== 0) throw new InputError('僅接受台北時間每日彙總；請開啟 Summarize / Day，不接受逐筆明細');
+    if (!local.endsWith('00:00:00') || start % 1000 !== 0) throw new InputError('僅接受從台北時間 00:00 開始的每日彙總；請開啟 Summarize / Day，不接受逐筆明細');
     day = local.slice(0,10);
   }
   if (row.start != null && row.date != null) {
     const dateDay = isDate(row.date) ? row.date : taipeiDate(timestamp(row.date));
     if (dateDay !== day) throw new InputError('start 與 date 不一致');
   }
+  let partial = false;
   if (row.end != null) {
-    const delta = timestamp(row.end) - start;
-    if (delta < 86399000 || delta > 86400000) throw new InputError('start/end 不是一個完整的台北日期彙總區間');
+    const end = timestamp(row.end), delta = end - start;
+    if (delta <= 0 || delta > 86400000) throw new InputError('start/end 必須位於同一個台北日，且從 00:00 開始');
+    // Health Auto Export can send today's running daily aggregate (00:00 -> now).
+    // Keep it as a temporary value; a later full-day export safely overwrites it via the date+metric primary key.
+    partial = delta < 86399000;
   }
-  return day;
+  return { day, partial };
 }
 function number(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) throw new InputError('數值必須是有效的非負 number；小數可以，空值或字串不可');
@@ -91,17 +95,19 @@ function getMetrics(payload) {
   return metrics;
 }
 export function parseHealth(payload) {
-  const records = new Map(); const warnings = []; const present = new Set();
+  const records = new Map(); const warnings = []; const warningSet = new Set(); const present = new Set();
+  const warn = message => { if (!warningSet.has(message)) { warningSet.add(message); warnings.push(message); } };
   for (const metric of getMetrics(payload)) {
     if (!object(metric) || typeof metric.name !== 'string') throw new InputError('無效指標物件');
-    if (!Object.hasOwn(METRICS, metric.name)) { warnings.push(`略過不支援指標：${metric.name.slice(0,80)}`); continue; }
+    if (!Object.hasOwn(METRICS, metric.name)) { warn(`略過不支援指標：${metric.name.slice(0,80)}`); continue; }
     present.add(metric.name);
     if (!Array.isArray(metric.data)) throw new InputError(`${metric.name}.data 必須是陣列`);
-    if (!metric.data.length) warnings.push(`${metric.name} 沒有資料；既有數值不會清空`);
+    if (!metric.data.length) warn(`${metric.name} 沒有資料；既有數值不會清空`);
     for (let i = 0; i < metric.data.length; i++) {
       try {
         const row = metric.data[i]; if (!object(row)) throw new InputError('紀錄必須是物件');
-        const date = bucket(row); const value = extractValue(metric,row);
+        const { day: date, partial } = bucket(row); const value = extractValue(metric,row);
+        if (partial) warn(`${metric.name} ${date} 為當日暫時值；完整日資料同步後會覆蓋，不會累加`);
         const rawSource = row.source ?? row.sources;
         const source = typeof rawSource === 'string' ? rawSource.trim().slice(0,300) : Array.isArray(rawSource) ? rawSource.filter(s=>typeof s==='string').sort().join('、').slice(0,300) : '';
         const item = { date, metric: metric.name, value, source: source || null };
@@ -111,7 +117,7 @@ export function parseHealth(payload) {
       } catch (e) { throw new InputError(`${metric.name} 第 ${i+1} 筆：${e.message}`); }
     }
   }
-  if (!present.has('step_count')) warnings.push('這次未包含步數；既有步數不會被當作 0 或清空');
+  if (!present.has('step_count')) warn('這次未包含步數；既有步數不會被當作 0 或清空');
   if (!records.size) throw new InputError('沒有可匯入的每日資料。'+warnings.join('；'));
   return { records: [...records.values()], warnings };
 }

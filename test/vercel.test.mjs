@@ -34,7 +34,11 @@ test('Vercel parsed body, cron authentication, limit and fixed schedule',async t
  const app=await createApp({...config,vercel:true},{clock:now,client:localClient(':memory:')});t.after(()=>app.close());
  await t.test('parsed object can be ingested',async()=>{const r=await invoke(app,'/api/ingest',{method:'POST',body:sample,headers:bearer});assert.equal(r.status,200);assert.equal(r.body.changed,1);});
  await t.test('parsed buffer deduplicates same record',async()=>{const r=await invoke(app,'/api/ingest',{method:'POST',body:Buffer.from(JSON.stringify(sample)),headers:bearer});assert.equal(r.body.changed,0);});
- await t.test('parsed body retains 2MB limit',async()=>assert.equal((await invoke(app,'/api/ingest',{method:'POST',body:{large:'x'.repeat(2*1024*1024)},headers:bearer})).status,413));
+ await t.test('parsed body allows under 4MB and rejects over 4MB',async()=>{
+   const under={name:'step_count',units:'count',data:[{date:'2026-10-24',qty:1}],padding:'x'.repeat(3*1024*1024)};
+   assert.equal((await invoke(app,'/api/ingest',{method:'POST',body:under,headers:bearer})).status,200);
+   assert.equal((await invoke(app,'/api/ingest',{method:'POST',body:{large:'x'.repeat(4*1024*1024+1024)},headers:bearer})).status,413);
+ });
  await t.test('cron GET cannot be triggered anonymously',async()=>assert.equal((await invoke(app,'/api/cron')).status,401));
  await t.test('authorized cron GET respects disabled switch and logs run',async()=>{const r=await invoke(app,'/api/cron',{headers:{authorization:'Bearer '+config.cronToken}});assert.equal(r.body.reason,'disabled');assert.ok((await app.store.events()).some(e=>e.event==='cron'));});
  await t.test('fixed report time exposed and other times rejected',async()=>{

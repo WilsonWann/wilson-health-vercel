@@ -14,7 +14,8 @@ test('ISO timestamp at Taipei midnight accepted',()=>{const p=daily();p.data.dat
 test('next midnight as exclusive end accepted',()=>{const p=daily();p.data.data[0].end='2026-10-25T00:00:00+08:00';assert.equal(parseHealth(p).records.length,1);});
 test('invalid numeric types rejected instead of coerced',()=>{for(const v of [null,'123',-1,NaN,Infinity])assert.throws(()=>parseHealth(daily(v)));});
 test('wrong units rejected',()=>{const p=daily();p.data.units='km';assert.throws(()=>parseHealth(p));});
-test('partial-day samples rejected',()=>{const p=daily();p.data.data[0].start='2026-10-24 03:00:00 +0800';assert.throws(()=>parseHealth(p));});
+test('running current-day aggregate from midnight is accepted with warning',()=>{const p=daily();p.data.data[0].end='2026-10-24 14:23:32 +0800';const r=parseHealth(p);assert.equal(r.records[0].value,1234.75);assert.match(r.warnings.join(),/暫時值/);});
+test('partial-day sample that does not start at midnight is rejected',()=>{const p=daily();p.data.data[0].start='2026-10-24 03:00:00 +0800';assert.throws(()=>parseHealth(p));});
 test('cross-day interval rejected',()=>{const p=daily();p.data.data[0].end='2026-10-26 23:59:59 +0800';assert.throws(()=>parseHealth(p));});
 test('invalid calendar date rejected',()=>{const p=daily();p.data.data[0].start='2026-02-30';assert.throws(()=>parseHealth(p));});
 test('identical duplicates deduplicated',()=>{const p=daily();p.data.data.push(record());assert.equal(parseHealth(p).records.length,1);});

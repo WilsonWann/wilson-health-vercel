@@ -37,11 +37,11 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     let supplied;try{supplied=req.body;}catch{throw new InputError('無效 JSON',400);}
     if(supplied!==undefined){
       let raw;try{raw=Buffer.isBuffer(supplied)?supplied.toString('utf8'):typeof supplied==='string'?supplied:JSON.stringify(supplied);}catch{throw new InputError('無效 JSON',400);}
-      if(Buffer.byteLength(raw||'')>2*1024*1024)throw new InputError('JSON 超過 2 MB；請縮小匯出範圍',413);
+      if(Buffer.byteLength(raw||'')>4*1024*1024)throw new InputError('JSON 超過 4 MB；請縮小匯出範圍或拆分指標',413);
       try{return JSON.parse(raw);}catch{throw new InputError('無效 JSON',400);}
     }
     let size=0;const chunks=[];
-    for await(const c of req){size+=c.length;if(size>2*1024*1024)throw new InputError('JSON 超過 2 MB；請縮小匯出範圍',413);chunks.push(c);}
+    for await(const c of req){size+=c.length;if(size>4*1024*1024)throw new InputError('JSON 超過 4 MB；請縮小匯出範圍或拆分指標',413);chunks.push(c);}
     try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new InputError('無效 JSON',400);}
   }
   function result(res,status,value,headers={}){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8',...headers});res.end(JSON.stringify(value));}
@@ -89,7 +89,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.1.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.2.0-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -108,8 +108,11 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
       if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
       if(path==='/api/ingest'&&method==='POST'){
         if(!eq(req.headers.authorization,`Bearer ${config.ingestToken}`))throw new InputError('匯入金鑰錯誤',401);
-        const aggregation=req.headers['automation-aggregation'];if(aggregation&&!/^(day|days)$/i.test(aggregation))throw new InputError('Automation Aggregation 需為 Days');
-        return result(res,200,await doImport(await jsonBody(req)));
+        const aggregation=req.headers['automation-aggregation'];
+        if(aggregation&&!/^(day|days)$/i.test(aggregation)){await store.event('ingest_rejected','Automation Aggregation 需為 Days',clock().toISOString());throw new InputError('Automation Aggregation 需為 Days');}
+        let payload;
+        try{payload=await jsonBody(req);}catch(e){if(e instanceof InputError)await store.event('ingest_rejected',e.message,clock().toISOString());throw e;}
+        return result(res,200,await doImport(payload));
       }
       if(path==='/api/cron'&&method==='GET'){
         if(!eq(req.headers.authorization,`Bearer ${config.cronToken}`))throw new InputError('排程金鑰錯誤',401);
@@ -123,7 +126,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
       if(path.startsWith('/api/')){
         await requireSession(req,method!=='GET');
         if(path==='/api/state'&&method==='GET'){
-          const to=url.searchParams.get('to')||shiftDate(taipeiDate(clock()),-1),from=url.searchParams.get('from')||shiftDate(to,-6);
+          const to=url.searchParams.get('to')||taipeiDate(clock()),from=url.searchParams.get('from')||shiftDate(to,-6);
           if(!isDate(from)||!isDate(to)||from>to||Date.parse(to)-Date.parse(from)>365*86400000)throw new InputError('日期範圍需有效，且一次最多查詢 366 天');
           const rows=await store.samples(from,to),steps=rows.filter(r=>r.metric==='step_count');
           return result(res,200,{settings:await publicSettings(),rows,stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,events:await store.events(),today:taipeiDate(clock()),from,to});

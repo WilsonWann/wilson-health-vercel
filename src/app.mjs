@@ -73,7 +73,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     await store.db.prepare('INSERT INTO sessions_v2(hash,csrf,expires,role) VALUES(?,?,?,?)').run(hash(token),csrf,now+SESSION_TTL,role);
     return {token,csrf,role,username:role==='guest'?guestUsername:adminUsername};
   }
-  const sessionCookie=token=>`wh2=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${config.production?'; Secure':''}`;
+  const sessionCookie=token=>`wh2=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${config.production?'; Secure':''}`;
   async function jsonBody(req){
     if(!(req.headers['content-type']||'').startsWith('application/json'))throw new InputError('Content-Type 需為 application/json',415);
     // Vercel may already have parsed the request body; don't consume an empty stream twice.
@@ -107,7 +107,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(!lineLoginReady())throw new InputError('請先設定 LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET',409);
     if(!['login','bind'].includes(purpose))throw new InputError('LINE Login 用途錯誤',400);
     const state=randomBytes(24).toString('hex'),nonce=randomBytes(24).toString('hex'),now=clock(),expires=now.getTime()+LINE_LINK_TTL,redirect=callbackUrl(req);
-    // line_auth_challenges_v3 retains poll_hash for backward-compatible schema, but 3.0.1 no longer polls.
+    // line_auth_challenges_v3 retains poll_hash for backward-compatible schema, but 3.0.2 no longer polls.
     const unusedPollHash=hash(randomBytes(32).toString('hex'));
     await store.createLineAuthChallenge({state,nonce,purpose,sessionHash,pollHash:unusedPollHash,expires,createdAt:now.toISOString()});
     const q=new URLSearchParams({
@@ -196,7 +196,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'3.0.1-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'3.0.2-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -214,7 +214,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         checkOrigin(req);await jsonBody(req);return result(res,200,await startLineAuth(req,{purpose:'login'}));
       }
       if(path==='/api/session'&&method==='GET'){const s=await session(req);return result(res,200,s?{authenticated:true,csrf:s.csrf,role:s.role||'admin',username:(s.role||'admin')==='guest'?guestUsername:adminUsername}:{authenticated:false});}
-      if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions_v2 WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
+      if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions_v2 WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
       if((path==='/api/line/auth/callback'||path==='/api/line/link/callback')&&method==='GET')return await finishLineAuth(req,url,res);
       if(path==='/api/ingest'&&method==='POST'){
         if(!eq(req.headers.authorization,`Bearer ${config.ingestToken}`))throw new InputError('匯入金鑰錯誤',401);
@@ -267,7 +267,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
           const b=await jsonBody(req);if(b?.confirm!==true)throw new InputError('需要明確確認測試發送');
           const recent=await store.db.prepare("SELECT created_at FROM deliveries WHERE id LIKE 'test:%' ORDER BY created_at DESC LIMIT 1").get();
           if(recent&&clock().getTime()-Date.parse(recent.created_at)<60000)throw new InputError('測試訊息每分鐘最多一則',429);
-          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 3.0.1\nLINE 連線測試成功。這則訊息不含健康資料。'));
+          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 3.0.2\nLINE 連線測試成功。這則訊息不含健康資料。'));
         }
         if(path==='/api/report/send'&&method==='POST'){
           const b=await jsonBody(req);if(b?.confirm!==true||!isDate(b.date))throw new InputError('需要確認發送及有效日期');

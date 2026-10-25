@@ -1,4 +1,4 @@
-# Wilson 健康日報 3.0 — Vercel 部署版（程式版本 3.0.1）
+# Wilson 健康日報 3.0 — Vercel 部署版（程式版本 3.0.2）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
 **這是原始碼，不代表已經建立 Vercel 服務。依本次要求，壓縮包內的本機 `.env` 已寫入提供的 Messaging API Channel access token；`.env` 同時被 `.gitignore` 與 `.vercelignore` 排除。其他私人環境變數仍需自行合併/設定。**
@@ -70,14 +70,14 @@ Range: Previous 7 Days
 
 ## LINE Login、綁定與排程
 
-3.0.1 提供兩種登入方式：
+3.0.2 提供兩種登入方式：
 
 1. **LINE 官方 QR Login**：點「使用 LINE QR Code 登入」後，瀏覽器直接前往 LINE 官方授權頁；LINE 官方頁面預設顯示 QR Code。使用者以手機 LINE 掃描並完成驗證後，LINE callback 會回到健康日報並直接建立網站 Session。
 2. **帳號／密碼**：保留既有 admin / guest 流程。第一次使用 LINE Login 前，admin 必須先用帳密登入，在「LINE 連線」區完成一次 LINE 官方 QR 綁定。未綁定的 LINE 帳號不能直接登入私人儀表板。
 
 帳密登入後的 LINE 綁定也使用同一個 LINE Login Channel：點「用 LINE QR Code 綁定」→ 前往 LINE 官方 QR Login 頁 → 手機授權 → 後端驗證 ID token 的 `sub`（LINE userId）→ 綁定到 admin 帳號，同時作為日報收件人。
 
-### LINE 3.0.1 前置設定
+### LINE 3.0.2 前置設定
 
 1. 在 LINE Developers 的**同一個 Provider**下保留 Messaging API Channel，並建立 LINE Login Channel。
 2. LINE Login Channel 的 Basic settings → **Linked LINE Official Account**，連結目前的 Wilson 健康日報官方帳號。
@@ -182,7 +182,7 @@ Guest 是真正的後端唯讀角色，不只是前端把按鈕反灰：
 
 
 
-## 3.0.1 LINE 官方 QR Login
+## 3.0.2 LINE 官方 QR Login
 
 - 不再自行產生 OAuth QR Code，也不再使用桌面 polling。
 - 登入與 LINE 綁定都直接導向 LINE 官方授權頁。

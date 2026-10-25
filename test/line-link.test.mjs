@@ -50,7 +50,8 @@ test('admin binds LINE through official LINE QR Login and can later log in by of
   const lineStart=await req('/api/line/login/start',{method:'POST',body:{},auth:false});assert.equal(lineStart.r.status,200);assert.equal(lineStart.body.qrSvg,undefined);
   const loginAuthorize=new URL(lineStart.body.authorizeUrl);assert.equal(loginAuthorize.searchParams.get('initial_amr_display'),'lineqr');assert.equal(loginAuthorize.searchParams.get('switch_amr'),'false');
   const loginCallback=await req('/api/line/auth/callback?code=auth-code-2&state='+lineStart.body.state,{auth:false});assert.equal(loginCallback.r.status,302);assert.equal(loginCallback.r.headers.get('location'),'/?line=login-ok');
-  const lineCookie=loginCallback.r.headers.get('set-cookie').split(';')[0];
+  const loginSetCookie=loginCallback.r.headers.get('set-cookie');assert.match(loginSetCookie,/HttpOnly/);assert.match(loginSetCookie,/SameSite=Lax/);
+  const lineCookie=loginSetCookie.split(';')[0];
   const session=await req('/api/session',{auth:true,cookieOverride:lineCookie});assert.equal(session.body.authenticated,true);assert.equal(session.body.role,'admin');
   assert.ok(calls.some(c=>c.url==='https://api.line.me/oauth2/v2.1/token'));assert.ok(calls.some(c=>c.url==='https://api.line.me/oauth2/v2.1/verify'));
 });

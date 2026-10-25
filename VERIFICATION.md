@@ -29,10 +29,10 @@
 
 - 2.6.3: verified passwordless guest submit is not blocked by native HTML required validation.
 
-- 3.0.1：LINE Login 改用 LINE 官方 QR Login 頁；回歸測試驗證 QR 優先參數、callback token exchange、ID token verify、friendship status、收件人綁定與 callback 直接建立網站 session。
+- 3.0.2：LINE Login 維持 LINE 官方 QR Login，並將登入 session cookie 改為 SameSite=Lax，確保 LINE 跨站 callback 後的 redirect 能立即帶入登入狀態。回歸測試驗證 QR 優先參數、callback token exchange、ID token verify、friendship status、收件人綁定與 callback 直接建立網站 session。
 - QR/LINE Login 測試使用 fetch mock，沒有連真實 LINE 平台；正式部署仍需設定真實 LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET 與 Callback URL。
 
-## 3.0.1 LINE Login QR
+## 3.0.2 LINE Login QR
 
 - 帳號密碼登入回歸保持通過。
 - LINE Login QR start 產生 server-side SVG QR 與短效 state/nonce/poll secret。

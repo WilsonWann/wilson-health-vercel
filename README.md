@@ -1,4 +1,4 @@
-# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.3.0）
+# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.4.0）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
 **這是原始碼，不代表已經建立 Vercel 服務。沒有包含密碼、LINE Token、真實健康 JSON 或資料庫。**
@@ -111,3 +111,8 @@ restore 只處理健康數值，不搬移舊登入、LINE 設定或發送歷史�
 - Cron auth：https://vercel.com/docs/cron-jobs/manage-cron-jobs
 - Cron precision：https://vercel.com/docs/cron-jobs/usage-and-pricing
 - HAE REST API：https://help.healthyapps.dev/en/health-auto-export/automations/rest-api/
+
+
+## 2.4.0 身體測量
+
+儀表板新增身高、體重與 BMI。Health Auto Export 對應指標為 `height`、`weight_&_body_mass`、`body_mass_index`。身高統一顯示 cm、體重統一顯示 kg；若選定日期沒有新量測，會沿用截至該日最近一次身體測量並標示量測日期。

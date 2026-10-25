@@ -65,6 +65,16 @@ export class Store {
     await this.event('import',JSON.stringify(result),now);return result;
   }
   async samples(from='0000-01-01',to='9999-12-31'){return this.db.prepare('SELECT * FROM samples WHERE date BETWEEN ? AND ? ORDER BY date,metric').all(from,to);}
+  async metricSamples(metrics,to='9999-12-31'){
+    if(!Array.isArray(metrics)||!metrics.length)return [];
+    const marks=metrics.map(()=>'?').join(',');
+    return this.db.prepare(`SELECT * FROM samples WHERE metric IN (${marks}) AND date<=? ORDER BY date,metric`).all(...metrics,to);
+  }
+  async latestMetrics(metrics,to='9999-12-31'){
+    const rows=await this.metricSamples(metrics,to),latest=new Map();
+    for(const row of rows)latest.set(row.metric,row);
+    return [...latest.values()];
+  }
   async events(){return this.db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 40').all();}
   async consumeLoginAttempt(key,now){
     // Atomic and shared between serverless instances. Count every attempt before password work.

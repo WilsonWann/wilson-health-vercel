@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s);
 let csrf='',state=null,preview='';
-const metadata={step_count:['步數','步',0],sleep_analysis:['睡眠','小時',2],heart_rate:['平均心率','bpm',1],resting_heart_rate:['靜止心率','bpm',0],active_energy:['活動熱量','kcal',1],apple_exercise_time:['運動時間','分鐘',0]};
+const metadata={step_count:['步數','步',0],sleep_analysis:['睡眠','小時',2],heart_rate:['平均心率','bpm',1],resting_heart_rate:['靜止心率','bpm',0],active_energy:['活動熱量','kcal',1],apple_exercise_time:['運動時間','分鐘',0],height:['身高','cm',1],'weight_&_body_mass':['體重','kg',1],body_mass_index:['BMI','',1]};
+const bodyMetrics=new Set(['height','weight_&_body_mass','body_mass_index']);
 function fmtTime(s){if(!s)return '未提供';const d=new Date(s);return new Date(d.getTime()+8*3600000).toISOString().slice(0,19).replace('T',' ')+'（UTC+8）';}
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function notify(text,error=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').classList.toggle('error',error);}
@@ -20,9 +21,12 @@ function drawChart(){
 async function renderDay(){
   const date=$('#reportDate').value,rows=state.rows.filter(r=>r.date===date);$('#cards').replaceChildren();
   for(const[k,[label,unit,digits]]of Object.entries(metadata)){
-    const row=rows.find(r=>r.metric===k),card=el('div',null,'card');card.append(el('div',label,'label'));
-    const value=el('div',row?new Intl.NumberFormat('zh-TW',{minimumFractionDigits:digits,maximumFractionDigits:digits}).format(row.value):'未提供','value');if(row)value.append(el('span',unit,'unit'));card.append(value);
-    card.append(el('div',row?(k==='step_count'?`原值 ${row.value}`:row.source||'來源未標記'):'尚未匯入此指標','raw'));$('#cards').append(card);
+    let row=rows.find(r=>r.metric===k),carried=false;
+    if(!row&&bodyMetrics.has(k)){const candidates=(state.bodyRows||[]).filter(r=>r.metric===k&&r.date<=date);row=candidates.at(-1);carried=!!row;}
+    const card=el('div',null,'card');card.append(el('div',label,'label'));
+    const value=el('div',row?new Intl.NumberFormat('zh-TW',{minimumFractionDigits:digits,maximumFractionDigits:digits}).format(row.value):'未提供','value');if(row&&unit)value.append(el('span',unit,'unit'));card.append(value);
+    const detail=row?(k==='step_count'?`原值 ${row.value}`:carried?`最近量測 ${row.date}${row.source?' · '+row.source:''}`:row.source||'來源未標記'):'尚未匯入此指標';
+    card.append(el('div',detail,'raw'));$('#cards').append(card);
   }
   const latest=rows.map(r=>r.updated_at).sort().at(-1);$('#syncText').textContent=latest?'資料更新：'+fmtTime(latest):'尚未匯入資料';
   preview='';$('#report').textContent='此日期沒有資料。';$('#sendReport').disabled=true;$('#copyReport').disabled=true;
@@ -43,8 +47,8 @@ async function enter(){ $('#login').hidden=true;$('#workspace').hidden=false;awa
 $('#loginForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const r=await api('/api/login',{password:$('#password').value});csrf=r.csrf;$('#password').value='';await enter();}catch(err){$('#loginError').textContent=err.message;}finally{b.disabled=false;}});
 $('#logout').onclick=()=>busy($('#logout'),async()=>{await api('/api/logout',{});location.reload();});
 $('#refresh').onclick=()=>busy($('#refresh'),()=>load(false));$('#reportDate').onchange=()=>renderDay().catch(e=>notify(e.message,true));
-$('#jsonFile').onchange=async()=>{const f=$('#jsonFile').files[0];if(!f)return;if(f.size>2*1024*1024)return notify('檔案超過 2 MB',true);$('#jsonText').value=await f.text();};
-$('#importButton').onclick=()=>busy($('#importButton'),async()=>{let data;try{data=JSON.parse($('#jsonText').value);}catch{throw new Error('JSON 格式有誤，請貼完整內容');}const r=await api('/api/import',data);const message=`已驗證 ${r.received} 筆；更新 ${r.changed} 筆；${r.unchanged} 筆內容相同。\n${r.warnings.join('\n')}`;$('#importResult').textContent=message;notify('資料已匯入；沒有發送 LINE。');await load(false);});
+$('#jsonFile').onchange=async()=>{const f=$('#jsonFile').files[0];if(!f)return;if(f.size>4*1024*1024)return notify('檔案超過 4 MB',true);$('#jsonText').value=await f.text();};
+$('#importButton').onclick=()=>busy($('#importButton'),async()=>{let data;try{data=JSON.parse($('#jsonText').value);}catch{throw new Error('JSON 格式有誤，請貼完整內容');}const r=await api('/api/import',data);const message=`已驗證 ${r.received} 筆；更新 ${r.changed} 筆；${r.unchanged} 筆內容相同；略過 ${r.rejected||0} 筆。\n${r.warnings.join('\n')}`;$('#importResult').textContent=message;notify('資料已匯入；沒有發送 LINE。');await load(false);});
 $('#settingsForm').onsubmit=e=>{e.preventDefault();busy(e.submitter,async()=>{const r=await api('/api/settings',{displayName:$('#displayName').value,reportTime:$('#reportTime').value,autoSend:$('#autoSend').checked,lineToken:$('#token').value,userId:$('#userId').value});$('#token').value='';fillSettings(r.settings);notify('設定已儲存。接著可驗證 LINE 權杖。');await load(false);});};
 $('#verifyLine').onclick=()=>busy($('#verifyLine'),async()=>{const r=await api('/api/line/verify',{});notify(`${r.name}：${r.message}`);await load(true);});
 $('#testLine').onclick=()=>{if(!confirm('發送一則不含健康資料的 LINE 測試訊息？這會使用一則推播額度。'))return;busy($('#testLine'),async()=>{await api('/api/line/test',{confirm:true});notify('測試訊息已由 LINE API 受理，請確認手機是否收到。');await load(false);});};

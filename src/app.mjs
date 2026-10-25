@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, createHash, timingSafeEqual, scryptSync } from 'node:crypto';
-import { InputError,parseHealth,isDate,shiftDate,taipeiDate,taipeiParts,report,rawTotal } from './health.mjs';
+import { InputError,parseHealth,isDate,shiftDate,taipeiDate,taipeiParts,report,rawTotal,BODY_METRIC_NAMES } from './health.mjs';
 import { openStore } from './store.mjs';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const eq=(a,b)=>typeof a==='string'&&typeof b==='string'&&timingSafeEqual(Buffer.from(hash(a)),Buffer.from(hash(b)));
@@ -78,6 +78,11 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
       throw new InputError(message,502);
     }
   }
+  async function rowsForReport(day){
+    const dailyRows=await store.samples(day,day),present=new Set(dailyRows.map(r=>r.metric));
+    const latest=await store.latestMetrics(BODY_METRIC_NAMES,day);
+    return dailyRows.concat(latest.filter(r=>!present.has(r.metric)).map(r=>({...r,date:day,carried_from:r.date})));
+  }
   async function daily(){
     const s=await store.settings(),now=clock(),date=shiftDate(taipeiDate(now),-1);
     if(!s.auto_send)return {status:'skipped',reason:'disabled',date};
@@ -85,7 +90,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(!s.line_verified)return {status:'skipped',reason:'line_not_verified',date};
     const rows=await store.samples(date,date);
     if(!rows.some(r=>r.metric==='step_count'))return {status:'skipped',reason:'missing_steps',date};
-    return {...await sendMessage('daily:'+date,report(date,rows,s.display_name)),date};
+    return {...await sendMessage('daily:'+date,report(date,await rowsForReport(date),s.display_name)),date};
   }
   const handler=async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
@@ -93,7 +98,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.3.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.4.0-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -131,13 +136,13 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         if(path==='/api/state'&&method==='GET'){
           const to=url.searchParams.get('to')||taipeiDate(clock()),from=url.searchParams.get('from')||shiftDate(to,-6);
           if(!isDate(from)||!isDate(to)||from>to||Date.parse(to)-Date.parse(from)>365*86400000)throw new InputError('日期範圍需有效，且一次最多查詢 366 天');
-          const rows=await store.samples(from,to),steps=rows.filter(r=>r.metric==='step_count');
-          return result(res,200,{settings:await publicSettings(),rows,stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,events:await store.events(),today:taipeiDate(clock()),from,to});
+          const rows=await store.samples(from,to),steps=rows.filter(r=>r.metric==='step_count'),bodyRows=await store.metricSamples(BODY_METRIC_NAMES,to);
+          return result(res,200,{settings:await publicSettings(),rows,bodyRows,stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,events:await store.events(),today:taipeiDate(clock()),from,to});
         }
         if(path==='/api/import'&&method==='POST')return result(res,200,await doImport(await jsonBody(req)));
         if(path==='/api/backup'&&method==='GET')return result(res,200,{version:2,exportedAt:clock().toISOString(),rows:await store.samples()},{'Content-Disposition':'attachment; filename="health-v2-backup.json"'});
         if(path==='/api/report/preview'&&method==='GET'){
-          const date=url.searchParams.get('date');return result(res,200,{text:report(date,await store.samples(date,date),(await store.settings()).display_name)});
+          const date=url.searchParams.get('date');return result(res,200,{text:report(date,await rowsForReport(date),(await store.settings()).display_name)});
         }
         if(path==='/api/settings'&&method==='POST'){
           const b=await jsonBody(req),old=await store.settings(),c=await store.credentials();if(!b||typeof b!=='object')throw new InputError('設定格式錯誤');
@@ -165,7 +170,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         }
         if(path==='/api/report/send'&&method==='POST'){
           const b=await jsonBody(req);if(b?.confirm!==true||!isDate(b.date))throw new InputError('需要確認發送及有效日期');
-          return result(res,200,await sendMessage('daily:'+b.date,report(b.date,await store.samples(b.date,b.date),(await store.settings()).display_name)));
+          return result(res,200,await sendMessage('daily:'+b.date,report(b.date,await rowsForReport(b.date),(await store.settings()).display_name)));
         }
         throw new InputError('找不到 API',404);
       }

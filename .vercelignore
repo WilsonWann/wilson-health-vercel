@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+data
+*.sqlite*
+*.db*
+*private*.json
+*backup*.json
+test
+.git
+README.md
+VERIFICATION.md

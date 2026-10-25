@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+data/
+*.sqlite*
+*.db*
+node_modules/
+.vercel/
+*private*.json
+*backup*.json
+.DS_Store
+.vercel
+.env*

@@ -1,4 +1,4 @@
-# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.5.0）
+# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.6.0）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
 **這是原始碼，不代表已經建立 Vercel 服務。沒有包含密碼、LINE Token、真實健康 JSON 或資料庫。**
@@ -17,7 +17,10 @@
 
 | 名稱 | 說明 |
 |---|---|
+| ADMIN_USERNAME | 管理者登入帳號；未設定時預設 `admin` |
 | ADMIN_PASSWORD | 沿用現有 2.0 的管理密碼，至少 16 字元 |
+| GUEST_USERNAME | Guest 展示帳號；未設定時預設 `guest` |
+| GUEST_PASSWORD | Guest 密碼，至少 16 字元；設定後才啟用 Guest 登入 |
 | APP_KEY | 沿用現有 2.0 的 64 位 hex 金鑰；儲存 LINE 設定後不得隨意更換 |
 | INGEST_TOKEN | 沿用/設定至少 32 字元的手機匯入金鑰；不同於 LINE Token |
 | CRON_SECRET | 至少 32 字元的獨立排程金鑰 |
@@ -32,7 +35,7 @@ Vercel 不會因你電腦有 `.env` 而自動取得其內容；請在平台自�
 
 ### 部署保護與健康資料
 
-儀表板有自己的管理密碼，所有讀取健康資料的 API 需要登入；匯入 API 需要 Bearer 金鑰。
+儀表板改為帳號＋密碼登入。管理者可讀寫私人資料；Guest 僅取得伺服器產生的 Mock Data，後端不會把真實健康資料、LINE User ID、憑證、操作紀錄或備份回傳給 Guest。匯入 API 仍使用獨立 Bearer 金鑰。
 Vercel 平台的額外登入牆是另一層保護。iPhone 不是已登入 Vercel 的瀏覽器：正式匯入端點必須能抵達程式，或另行配置受控的自動化 bypass。不要停用程式自己的密碼/金鑰驗證。
 以手機發送一次測試，應收到 JSON，而不是 Vercel HTML 登入畫面。不要將服務移成無驗證 API。
 
@@ -120,3 +123,17 @@ restore 只處理健康數值，不搬移舊登入、LINE 設定或發送歷史�
 ## 2.4.0 身體測量
 
 儀表板新增身高、體重與 BMI。Health Auto Export 對應指標為 `height`、`weight_&_body_mass`、`body_mass_index`。身高統一顯示 cm、體重統一顯示 kg；若選定日期沒有新量測，會沿用截至該日最近一次身體測量並標示量測日期。
+
+
+## 2.6.0 帳號與 Guest 展示模式
+
+登入入口改為「帳號＋密碼」。管理者帳號由 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 控制；Guest 帳號由 `GUEST_USERNAME` / `GUEST_PASSWORD` 控制。既有部署只需新增 Guest 密碼（以及需要時自訂帳號名稱），原本的 ADMIN_PASSWORD、APP_KEY、Turso 與 LINE 設定都可沿用。
+
+Guest 是真正的後端唯讀角色，不只是前端把按鈕反灰：
+- `/api/state` 只回傳獨立生成的 Mock Data，不查詢或回傳私人健康資料。
+- `/api/report/preview` 只使用 Mock Data。
+- 備份、手動匯入、LINE 設定/驗證/發送、排程與私人操作紀錄均禁止 Guest 存取，直接回 403。
+- 前端仍將私人區塊反灰 disabled，方便展示網站結構但不顯示隱私內容。
+- 既有 `sessions` table 會自動新增 `role` 欄位，舊 session 預設視為 admin；不需要手動修改 Turso schema。
+
+若本機首次使用 `npm run setup`，會同時產生 admin 與 guest 的首次密碼；正式 Vercel 請自行在 Environment Variables 設定。

@@ -1,13 +1,21 @@
 const $=s=>document.querySelector(s);
-let csrf='',state=null,preview='',selectedMetric='step_count';
+let csrf='',state=null,preview='',selectedMetric='step_count',role='admin';
 const metadata={step_count:['步數','步',0],sleep_analysis:['睡眠','小時',2],heart_rate:['平均心率','bpm',1],resting_heart_rate:['靜止心率','bpm',0],active_energy:['活動熱量','kcal',1],apple_exercise_time:['運動時間','分鐘',0],height:['身高','cm',1],'weight_&_body_mass':['體重','kg',1],body_mass_index:['BMI','',1]};
 const bodyMetrics=new Set(['height','weight_&_body_mass','body_mass_index']);
 function fmtTime(s){if(!s)return '未提供';const d=new Date(s);return new Date(d.getTime()+8*3600000).toISOString().slice(0,19).replace('T',' ')+'（UTC+8）';}
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function notify(text,error=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').classList.toggle('error',error);}
+
+function applyRole(){
+  const guest=role==='guest';document.body.classList.toggle('guest-mode',guest);$('#guestBanner').hidden=!guest;$('#workspaceMode').textContent=guest?'● Guest 展示模式':'● 私人工作區';
+  $('#scheduleBadge').textContent=guest?'Guest Demo · 唯讀':($('#scheduleBadge').textContent||'自動發送未啟用');
+  document.querySelectorAll('[data-admin-only]').forEach(box=>{box.classList.toggle('guest-disabled',guest);box.setAttribute('aria-disabled',String(guest));box.querySelectorAll('input,textarea,button,select').forEach(x=>x.disabled=guest);});
+  const backup=$('#backupLink');if(guest){backup.removeAttribute('href');backup.setAttribute('aria-disabled','true');backup.onclick=e=>e.preventDefault();}else{backup.href='/api/backup';backup.removeAttribute('aria-disabled');backup.onclick=null;}
+  document.querySelectorAll('nav a[href="#import"],nav a[href="#line"],nav a[href="#history"]').forEach(a=>a.classList.toggle('nav-disabled',guest));
+}
 async function api(path,data){const r=await fetch(path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:data===undefined?undefined:JSON.stringify(data)});const v=await r.json();if(!r.ok){if(r.status===401){$('#workspace').hidden=true;$('#login').hidden=false;}throw new Error(v.error||'請求失敗');}return v;}
 async function busy(button,fn){button.disabled=true;try{await fn();}catch(e){notify(e.message,true);}finally{button.disabled=false;}}
-function fillSettings(s){$('#displayName').value=s.displayName;$('#reportTime').value=s.reportTime;$('#autoSend').checked=s.autoSend;$('#userId').value=s.userId;$('#verifyLine').disabled=!s.lineConfigured;$('#testLine').disabled=!s.lineConfigured;$('#lineBadge').textContent=s.lineVerified?'權杖已驗證':s.lineConfigured?'已儲存，尚未驗證':'尚未設定';$('#scheduleBadge').textContent=s.autoSend?`每日 ${s.reportTime} 後排程發送`:'自動發送未啟用';$('#ingestUrl').value=location.origin+s.ingestPath;$('#reportTime').disabled=!!s.fixedReportTime;if(s.fixedReportTime)$('#reportTime').value=s.fixedReportTime;}
+function fillSettings(s){$('#displayName').value=s.displayName;$('#reportTime').value=s.reportTime;$('#autoSend').checked=s.autoSend;$('#userId').value=s.userId||'';$('#verifyLine').disabled=role==='guest'||!s.lineConfigured;$('#testLine').disabled=role==='guest'||!s.lineConfigured;$('#lineBadge').textContent=role==='guest'?'Guest 模式 · 不提供':s.lineVerified?'權杖已驗證':s.lineConfigured?'已儲存，尚未驗證':'尚未設定';$('#scheduleBadge').textContent=role==='guest'?'Guest Demo · 唯讀':s.autoSend?`每日 ${s.reportTime} 後排程發送`:'自動發送未啟用';$('#ingestUrl').value=role==='guest'?'':location.origin+s.ingestPath;$('#reportTime').disabled=role==='guest'||!!s.fixedReportTime;if(s.fixedReportTime)$('#reportTime').value=s.fixedReportTime;}
 function metricRows(metric){
   const source=bodyMetrics.has(metric)?(state.bodyRows||[]):state.rows;
   return source.filter(r=>r.metric===metric&&r.date<=state.to&&(bodyMetrics.has(metric)||r.date>=state.from));
@@ -63,18 +71,18 @@ async function renderDay(){
   const latest=rows.map(r=>r.updated_at).sort().at(-1);$('#syncText').textContent=latest?'資料更新：'+fmtTime(latest):'尚未匯入資料';
   preview='';$('#report').textContent='此日期沒有資料。';$('#sendReport').disabled=true;$('#copyReport').disabled=true;
   if(!date)return;
-  try{const r=await api('/api/report/preview?date='+encodeURIComponent(date));preview=r.text;$('#report').textContent=preview;$('#sendReport').disabled=!state.settings.lineConfigured;$('#copyReport').disabled=false;}catch(e){$('#report').textContent=e.message;}
+  try{const r=await api('/api/report/preview?date='+encodeURIComponent(date));preview=r.text;$('#report').textContent=preview;$('#sendReport').disabled=role==='guest'||!state.settings.lineConfigured;$('#copyReport').disabled=false;}catch(e){$('#report').textContent=e.message;}
 }
 async function load(resetSettings=false){
   const params=new URLSearchParams();if($('#from').value)params.set('from',$('#from').value);if($('#to').value)params.set('to',$('#to').value);
-  state=await api('/api/state?'+params);$('#from').value=state.from;$('#to').value=state.to;
-  if(resetSettings)fillSettings(state.settings);else{$('#scheduleBadge').textContent=state.settings.autoSend?`每日 ${state.settings.reportTime} 後排程發送`:'自動發送未啟用';}
+  state=await api('/api/state?'+params);role=state.role||role;$('#from').value=state.from;$('#to').value=state.to;
+  if(resetSettings)fillSettings(state.settings);else{$('#scheduleBadge').textContent=role==='guest'?'Guest Demo · 唯讀':state.settings.autoSend?`每日 ${state.settings.reportTime} 後排程發送`:'自動發送未啟用';}applyRole();
   const last=$('#reportDate').value,days=[...new Set(state.rows.map(r=>r.date))].sort().reverse();$('#reportDate').replaceChildren(...days.map(d=>{const o=el('option',d);o.value=d;return o;}));if(days.includes(last))$('#reportDate').value=last;
   await renderDay();selectMetric(selectedMetric);$('#events').replaceChildren(...state.events.map(x=>{const box=el('div',null,'event');box.append(el('time',fmtTime(x.created_at)));const msg=el('div',null,'msg');msg.append(el('strong',x.event),document.createTextNode(x.message));box.append(msg);return box;}));
-  if(!state.events.length)$('#events').append(el('p','尚無操作紀錄','muted'));
+  if(!state.events.length)$('#events').append(el('p',role==='guest'?'Guest 模式不提供私人操作紀錄。':'尚無操作紀錄','muted'));
 }
-async function enter(){ $('#login').hidden=true;$('#workspace').hidden=false;await load(true); }
-$('#loginForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const r=await api('/api/login',{password:$('#password').value});csrf=r.csrf;$('#password').value='';await enter();}catch(err){$('#loginError').textContent=err.message;}finally{b.disabled=false;}});
+async function enter(){ $('#login').hidden=true;$('#workspace').hidden=false;await load(true);applyRole(); }
+$('#loginForm').addEventListener('submit',async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const r=await api('/api/login',{username:$('#username').value,password:$('#password').value});csrf=r.csrf;role=r.role||'admin';$('#password').value='';$('#loginError').textContent='';await enter();}catch(err){$('#loginError').textContent=err.message;}finally{b.disabled=false;}});
 $('#logout').onclick=()=>busy($('#logout'),async()=>{await api('/api/logout',{});location.reload();});
 $('#refresh').onclick=()=>busy($('#refresh'),()=>load(false));$('#reportDate').onchange=()=>renderDay().catch(e=>notify(e.message,true));
 $('#jsonFile').onchange=async()=>{const f=$('#jsonFile').files[0];if(!f)return;if(f.size>4*1024*1024)return notify('檔案超過 4 MB',true);$('#jsonText').value=await f.text();};
@@ -84,4 +92,4 @@ $('#verifyLine').onclick=()=>busy($('#verifyLine'),async()=>{const r=await api('
 $('#testLine').onclick=()=>{if(!confirm('發送一則不含健康資料的 LINE 測試訊息？這會使用一則推播額度。'))return;busy($('#testLine'),async()=>{await api('/api/line/test',{confirm:true});notify('測試訊息已由 LINE API 受理，請確認手機是否收到。');await load(false);});};
 $('#sendReport').onclick=()=>{if(!confirm(`將 ${$('#reportDate').value} 的健康日報傳給已設定的個人 LINE 收件人？`))return;busy($('#sendReport'),async()=>{const r=await api('/api/report/send',{date:$('#reportDate').value,confirm:true});notify(r.status==='accepted'?'日報已由 LINE API 受理。':r.reason==='already_sent'?'這一天已發送，不會重複傳送。':'發送正在處理，沒有重複提交。');await load(false);});};
 $('#copyReport').onclick=()=>busy($('#copyReport'),async()=>{await navigator.clipboard.writeText(preview);notify('已複製日報文字。');});
-try{const s=await api('/api/session');if(s.authenticated){csrf=s.csrf;await enter();}}catch(e){$('#loginError').textContent=e.message;}
+try{const s=await api('/api/session');if(s.authenticated){csrf=s.csrf;role=s.role||'admin';await enter();}}catch(e){$('#loginError').textContent=e.message;}

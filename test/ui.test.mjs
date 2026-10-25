@@ -23,3 +23,15 @@ test('selected metric card has visible focus and selected styles',()=>{
   assert.match(css,/\.metric-card:focus-visible/);
   assert.match(css,/\.metric-card\.selected/);
 });
+
+test('login uses username and password fields',()=>{
+  assert.match(html,/id="username"/);assert.match(html,/autocomplete="username"/);assert.match(app,/username:\$\('#username'\)\.value/);
+});
+
+test('guest UI disables private admin panels and advertises mock data',()=>{
+  assert.match(html,/id="guestBanner"/);assert.match(html,/data-admin-only/);assert.match(app,/role==='guest'/);assert.match(app,/guest-disabled/);assert.match(css,/\.guest-disabled::after/);
+});
+
+test('date select uses an inset custom arrow',()=>{
+  assert.match(css,/background-position:right 1rem center/);
+});

@@ -8,7 +8,7 @@ import { openStore } from '../src/store.mjs';
 import { localClient } from '../src/local-client.mjs';
 import { configFromEnv } from '../src/config.mjs';
 import { normalizeRoute } from '../api/index.mjs';
-const config={password:'fixture-password-not-real',key:'b'.repeat(64),ingestToken:'i'.repeat(40),cronToken:'c'.repeat(40),dbPath:':memory:',production:false,origin:''};
+const config={password:'fixture-password-not-real',adminUsername:'admin',guestUsername:'guest',guestPassword:'guest-fixture-password-not-real',key:'b'.repeat(64),ingestToken:'i'.repeat(40),cronToken:'c'.repeat(40),dbPath:':memory:',production:false,origin:''};
 const sample={name:'step_count',units:'count',data:[{date:'2026-10-24',qty:1234.567,sources:''}]};
 const now=()=>new Date('2026-10-25T02:00:00Z');
 function invoke(app,path,{method='GET',body,headers={}}={}){
@@ -42,7 +42,7 @@ test('Vercel parsed body, cron authentication, limit and fixed schedule',async t
  await t.test('cron GET cannot be triggered anonymously',async()=>assert.equal((await invoke(app,'/api/cron')).status,401));
  await t.test('authorized cron GET respects disabled switch and logs run',async()=>{const r=await invoke(app,'/api/cron',{headers:{authorization:'Bearer '+config.cronToken}});assert.equal(r.body.reason,'disabled');assert.ok((await app.store.events()).some(e=>e.event==='cron'));});
  await t.test('fixed report time exposed and other times rejected',async()=>{
-   const login=await invoke(app,'/api/login',{method:'POST',body:{password:config.password},headers:{'content-type':'application/json'}});
+   const login=await invoke(app,'/api/login',{method:'POST',body:{username:'admin',password:config.password},headers:{'content-type':'application/json'}});
    const headers={cookie:login.headers['set-cookie'].split(';')[0],'x-csrf-token':login.body.csrf,'content-type':'application/json'};
    assert.equal((await invoke(app,'/api/state',{headers})).body.settings.fixedReportTime,'09:00');
    assert.equal((await invoke(app,'/api/settings',{method:'POST',body:{reportTime:'12:00'},headers})).status,422);
@@ -54,7 +54,7 @@ test('independent app instances share durable sessions, samples and atomic deliv
  const a=await createApp({...config,dbPath},{clock:now,fetcher});
  const b=await createApp({...config,dbPath},{clock:now,fetcher});
  t.after(async()=>{await a.close();await b.close();rmSync(dir,{recursive:true,force:true});});
- const login=await invoke(a,'/api/login',{method:'POST',body:{password:config.password},headers:{'content-type':'application/json'}});
+ const login=await invoke(a,'/api/login',{method:'POST',body:{username:'admin',password:config.password},headers:{'content-type':'application/json'}});
  const headers={cookie:login.headers['set-cookie'].split(';')[0],'x-csrf-token':login.body.csrf,'content-type':'application/json'};
  assert.equal((await invoke(b,'/api/session',{headers})).body.authenticated,true);
  await invoke(a,'/api/ingest',{method:'POST',body:sample,headers:bearer});
@@ -69,8 +69,8 @@ test('login limiter is persisted rather than reset by a cold start',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'wilson-limit-')),dbPath=join(dir,'test.sqlite');
  const a=await createApp({...config,dbPath},{clock:now}),b=await createApp({...config,dbPath},{clock:now});
  t.after(async()=>{await a.close();await b.close();rmSync(dir,{recursive:true,force:true});});
- for(let i=0;i<8;i++)assert.equal((await invoke(i%2?a:b,'/api/login',{method:'POST',body:{password:'incorrect'},headers:{'content-type':'application/json'}})).status,401);
- assert.equal((await invoke(b,'/api/login',{method:'POST',body:{password:config.password},headers:{'content-type':'application/json'}})).status,429);
+ for(let i=0;i<8;i++)assert.equal((await invoke(i%2?a:b,'/api/login',{method:'POST',body:{username:'admin',password:'incorrect'},headers:{'content-type':'application/json'}})).status,401);
+ assert.equal((await invoke(b,'/api/login',{method:'POST',body:{username:'admin',password:config.password},headers:{'content-type':'application/json'}})).status,429);
 });
 test('batch writes roll back completely if one DB statement fails',async t=>{
  const s=await openStore(config);t.after(()=>s.close());

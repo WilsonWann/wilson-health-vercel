@@ -4,7 +4,7 @@ import { createApp } from '../src/app.mjs';
 const metric=(day='2026-10-24',qty=1234.75)=>({data:{name:'step_count',units:'count',data:[{date:day,qty,sources:''}]}});
 test('HTTP, persistence, authentication and LINE integration with mocked LINE',async t=>{
  let now=new Date('2026-10-25T03:00:00Z'), failNext=false;const calls=[];
- const app=await createApp({password:'test-only-password-12345',key:'a'.repeat(64),ingestToken:'i'.repeat(40),cronToken:'c'.repeat(40),dbPath:':memory:',production:false,origin:''},{clock:()=>now,fetcher:async(url,options)=>{
+ const app=await createApp({password:'test-only-password-12345',adminUsername:'admin',guestUsername:'guest',guestPassword:'guest-test-password-12345',key:'a'.repeat(64),ingestToken:'i'.repeat(40),cronToken:'c'.repeat(40),dbPath:':memory:',production:false,origin:''},{clock:()=>now,fetcher:async(url,options)=>{
    calls.push({url,options});if(failNext&&url.endsWith('/push')){failNext=false;throw new Error('simulated timeout');}
    return new Response(JSON.stringify(url.endsWith('/info')?{displayName:'Test Bot'}:{}),{status:200});
  }});
@@ -12,7 +12,7 @@ test('HTTP, persistence, authentication and LINE integration with mocked LINE',a
  t.after(()=>app.close());let cookie='',csrf='';
  async function req(path,data,extra={}){const r=await fetch(base+path,{method:data===undefined?'GET':'POST',headers:{...(cookie?{Cookie:cookie}:{}),...(data===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf,Origin:base}),...extra},body:data===undefined?undefined:JSON.stringify(data)});let body;try{body=await r.json();}catch{body={};}return {r,body};}
  await t.test('private data is inaccessible without login',async()=>assert.equal((await req('/api/state')).r.status,401));
- await t.test('login returns HttpOnly cookie and CSRF',async()=>{const x=await req('/api/login',{password:'test-only-password-12345'});assert.equal(x.r.status,200);cookie=x.r.headers.get('set-cookie').split(';')[0];csrf=x.body.csrf;assert.match(x.r.headers.get('set-cookie'),/HttpOnly/);assert.match(x.r.headers.get('set-cookie'),/SameSite=Strict/);});
+ await t.test('login returns HttpOnly cookie and CSRF',async()=>{const x=await req('/api/login',{username:'admin',password:'test-only-password-12345'});assert.equal(x.r.status,200);cookie=x.r.headers.get('set-cookie').split(';')[0];csrf=x.body.csrf;assert.match(x.r.headers.get('set-cookie'),/HttpOnly/);assert.match(x.r.headers.get('set-cookie'),/SameSite=Strict/);});
  await t.test('writes without CSRF denied',async()=>assert.equal((await req('/api/import',metric(),{'X-CSRF-Token':''})).r.status,403));
  await t.test('cross-origin writes denied',async()=>assert.equal((await req('/api/import',metric(),{Origin:'https://attacker.example'})).r.status,403));
  await t.test('phone import without bearer denied',async()=>assert.equal((await req('/api/ingest',metric())).r.status,401));

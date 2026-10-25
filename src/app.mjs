@@ -9,13 +9,42 @@ const eq=(a,b)=>typeof a==='string'&&typeof b==='string'&&timingSafeEqual(Buffer
 const SESSION_TTL=8*3600*1000;
 const textFile=p=>readFileSync(fileURLToPath(new URL('../public/'+p,import.meta.url)));
 const STATIC={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
+
+const USERNAME_RE=/^[A-Za-z0-9._-]{3,50}$/;
+function mockRows(from,to,updatedAt){
+  const patterns={
+    step_count:[6420.4,7811.8,5230.2,9044.7,6888.3,8125.9,7355.6],
+    sleep_analysis:[7.42,7.88,6.95,8.14,7.63,7.27,8.02],
+    heart_rate:[71.4,72.8,70.6,73.1,69.9,71.7,70.8],
+    resting_heart_rate:[60,61,59,62,58,60,59],
+    active_energy:[448.2,512.6,391.4,584.7,463.1,531.5,489.8],
+    apple_exercise_time:[28,36,19,47,31,42,34],
+    height:[168,168,168,168,168,168,168],
+    'weight_&_body_mass':[63.5,63.4,63.6,63.3,63.2,63.4,63.2],
+    body_mass_index:[22.5,22.5,22.5,22.4,22.4,22.5,22.4]
+  };
+  const rows=[];let i=0;
+  for(let d=from;d<=to&&i<366;d=shiftDate(d,1),i++){
+    for(const [metric,values] of Object.entries(patterns))rows.push({date:d,metric,value:values[i%values.length],source:'Mock Data',updated_at:updatedAt});
+  }
+  return rows;
+}
+function mockState(from,to,now,config){
+  const rows=mockRows(from,to,now.toISOString()),steps=rows.filter(r=>r.metric==='step_count');
+  return {role:'guest',mock:true,settings:{displayName:'Guest Demo',autoSend:false,reportTime:'09:00',lineConfigured:false,lineVerified:false,userId:'',ingestPath:'',fixedReportTime:config.vercel?'09:00':null},rows,bodyRows:rows.filter(r=>BODY_METRIC_NAMES.includes(r.metric)),stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,events:[],today:taipeiDate(now),from,to};
+}
 export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),client}={}) {
+  const adminUsername=String(config.adminUsername||'admin').trim(),guestUsername=String(config.guestUsername||'guest').trim();
+  if(!USERNAME_RE.test(adminUsername))throw new Error('ADMIN_USERNAME 需為 3–50 個英數、點、底線或連字號');
+  if(!USERNAME_RE.test(guestUsername))throw new Error('GUEST_USERNAME 需為 3–50 個英數、點、底線或連字號');
+  if(adminUsername.toLowerCase()===guestUsername.toLowerCase())throw new Error('管理者與 Guest 帳號不得相同');
   if(typeof config.password!=='string'||config.password.length<16)throw new Error('ADMIN_PASSWORD 至少 16 字元');
+  if(config.guestPassword && config.guestPassword.length<16)throw new Error('GUEST_PASSWORD 至少 16 字元');
   if(!/^[a-f0-9]{64}$/i.test(config.key||''))throw new Error('APP_KEY 需為 64 位十六進位字串');
   for(const k of ['ingestToken','cronToken'])if(typeof config[k]!=='string'||config[k].length<32)throw new Error(k+' 至少 32 字元');
   if(config.production && !/^https:\/\/[^/]+$/.test(config.origin||''))throw new Error('正式環境需設定 HTTPS APP_ORIGIN');
   const store=await openStore(config,{client});
-  const passwordSalt=randomBytes(16); const passwordHash=scryptSync(config.password,passwordSalt,32);
+  const adminSalt=randomBytes(16),guestSalt=randomBytes(16),adminHash=scryptSync(config.password,adminSalt,32),guestHash=scryptSync(config.guestPassword||randomBytes(24).toString('hex'),guestSalt,32);
   async function credentials(){const c=await store.credentials();if(!c)throw new InputError('請先儲存 LINE 設定',409);return c;}
   async function publicSettings(){
     const s=await store.settings(),c=await store.credentials();return {displayName:s.display_name,autoSend:!!s.auto_send,reportTime:s.report_time,lineConfigured:!!c,lineVerified:!!s.line_verified,userId:c?.userId||'',ingestPath:'/api/ingest',fixedReportTime:config.vercel?'09:00':null};
@@ -31,6 +60,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     const s=await session(req);if(!s)throw new InputError('請先登入',401);
     if(write){checkOrigin(req);if(!eq(req.headers['x-csrf-token'],s.csrf))throw new InputError('驗證已過期，請重新登入',403);}return s;
   }
+  async function requireAdminSession(req,write=false){const s=await requireSession(req,write);if(s.role!=='admin')throw new InputError('Guest 為唯讀展示模式，無權執行此操作',403);return s;}
   async function jsonBody(req){
     if(!(req.headers['content-type']||'').startsWith('application/json'))throw new InputError('Content-Type 需為 application/json',415);
     // Vercel may already have parsed the request body; don't consume an empty stream twice.
@@ -98,22 +128,23 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.5.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.6.0-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
         const ipKey=hash(config.key+':'+String(ip).split(',')[0]);
         await store.consumeLoginAttempt(ipKey,now);
-        const b=await jsonBody(req);const password=typeof b?.password==='string'?b.password:'';
-        if(password.length>1024)throw new InputError('密碼過長',400);
-        const ok=timingSafeEqual(scryptSync(password,passwordSalt,32),passwordHash);
-        if(!ok)throw new InputError('密碼錯誤',401);
+        const b=await jsonBody(req),username=typeof b?.username==='string'?b.username.trim():'',password=typeof b?.password==='string'?b.password:'';
+        if(username.length>100||password.length>1024)throw new InputError('帳號或密碼格式錯誤',400);
+        const adminPass=timingSafeEqual(scryptSync(password,adminSalt,32),adminHash),guestPass=timingSafeEqual(scryptSync(password,guestSalt,32),guestHash);
+        const role=username.toLowerCase()===adminUsername.toLowerCase()&&adminPass?'admin':config.guestPassword&&username.toLowerCase()===guestUsername.toLowerCase()&&guestPass?'guest':null;
+        if(!role)throw new InputError('帳號或密碼錯誤',401);
         await store.clearLoginAttempts(ipKey);await store.db.prepare('DELETE FROM sessions WHERE expires<?').run(now);
         const token=randomBytes(32).toString('hex'),csrf=randomBytes(24).toString('hex');
-        await store.db.prepare('INSERT INTO sessions(hash,csrf,expires) VALUES(?,?,?)').run(hash(token),csrf,now+SESSION_TTL);
-        return result(res,200,{ok:true,csrf},{'Set-Cookie':`wh2=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${config.production?'; Secure':''}`});
+        await store.db.prepare('INSERT INTO sessions(hash,csrf,expires,role) VALUES(?,?,?,?)').run(hash(token),csrf,now+SESSION_TTL,role);
+        return result(res,200,{ok:true,csrf,role,username:role==='guest'?guestUsername:adminUsername},{'Set-Cookie':`wh2=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${config.production?'; Secure':''}`});
       }
-      if(path==='/api/session'&&method==='GET'){const s=await session(req);return result(res,200,s?{authenticated:true,csrf:s.csrf}:{authenticated:false});}
+      if(path==='/api/session'&&method==='GET'){const s=await session(req);return result(res,200,s?{authenticated:true,csrf:s.csrf,role:s.role||'admin',username:(s.role||'admin')==='guest'?guestUsername:adminUsername}:{authenticated:false});}
       if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
       if(path==='/api/ingest'&&method==='POST'){
         if(!eq(req.headers.authorization,`Bearer ${config.ingestToken}`))throw new InputError('匯入金鑰錯誤',401);
@@ -127,23 +158,27 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         const run=await daily();await store.event('cron',JSON.stringify(run),clock().toISOString());return result(res,200,run);
       }
       if(path==='/api/jobs/daily'){
-        const cron=eq(req.headers.authorization,`Bearer ${config.cronToken}`);if(!cron)await requireSession(req,method==='POST');
+        const cron=eq(req.headers.authorization,`Bearer ${config.cronToken}`);if(!cron)await requireAdminSession(req,method==='POST');
         if(method==='POST'){await jsonBody(req);return result(res,200,await daily());}
         if(method==='GET')return result(res,200,{runs:await store.db.prepare('SELECT id,status,created_at,attempt_at,error FROM deliveries ORDER BY created_at DESC LIMIT 30').all()});
       }
       if(path.startsWith('/api/')){
-        await requireSession(req,method!=='GET');
+        const auth=await requireSession(req,method!=='GET');
         if(path==='/api/state'&&method==='GET'){
           const to=url.searchParams.get('to')||taipeiDate(clock()),from=url.searchParams.get('from')||shiftDate(to,-6);
           if(!isDate(from)||!isDate(to)||from>to||Date.parse(to)-Date.parse(from)>365*86400000)throw new InputError('日期範圍需有效，且一次最多查詢 366 天');
+          if((auth.role||'admin')==='guest')return result(res,200,mockState(from,to,clock(),config));
           const rows=await store.samples(from,to),steps=rows.filter(r=>r.metric==='step_count'),bodyRows=await store.metricSamples(BODY_METRIC_NAMES,to);
-          return result(res,200,{settings:await publicSettings(),rows,bodyRows,stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,events:await store.events(),today:taipeiDate(clock()),from,to});
+          return result(res,200,{role:'admin',mock:false,settings:await publicSettings(),rows,bodyRows,stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,events:await store.events(),today:taipeiDate(clock()),from,to});
         }
+        if(path==='/api/report/preview'&&method==='GET'){
+          const date=url.searchParams.get('date');if(!isDate(date))throw new InputError('日期格式錯誤');
+          if((auth.role||'admin')==='guest'){const rows=mockRows(date,date,clock().toISOString());return result(res,200,{text:report(date,rows,'Guest Demo'),mock:true});}
+          return result(res,200,{text:report(date,await rowsForReport(date),(await store.settings()).display_name)});
+        }
+        if((auth.role||'admin')!=='admin')throw new InputError('Guest 為唯讀展示模式，無權存取私人功能',403);
         if(path==='/api/import'&&method==='POST')return result(res,200,await doImport(await jsonBody(req)));
         if(path==='/api/backup'&&method==='GET')return result(res,200,{version:2,exportedAt:clock().toISOString(),rows:await store.samples()},{'Content-Disposition':'attachment; filename="health-v2-backup.json"'});
-        if(path==='/api/report/preview'&&method==='GET'){
-          const date=url.searchParams.get('date');return result(res,200,{text:report(date,await rowsForReport(date),(await store.settings()).display_name)});
-        }
         if(path==='/api/settings'&&method==='POST'){
           const b=await jsonBody(req),old=await store.settings(),c=await store.credentials();if(!b||typeof b!=='object')throw new InputError('設定格式錯誤');
           const name=b.displayName??old.display_name,time=b.reportTime??old.report_time;let auto=b.autoSend??!!old.auto_send;

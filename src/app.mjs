@@ -98,7 +98,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.4.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'2.5.0-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');

@@ -1,4 +1,4 @@
-# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.4.0）
+# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.5.0）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
 **這是原始碼，不代表已經建立 Vercel 服務。沒有包含密碼、LINE Token、真實健康 JSON 或資料庫。**
@@ -112,6 +112,10 @@ restore 只處理健康數值，不搬移舊登入、LINE 設定或發送歷史�
 - Cron precision：https://vercel.com/docs/cron-jobs/usage-and-pricing
 - HAE REST API：https://help.healthyapps.dev/en/health-auto-export/automations/rest-api/
 
+
+## 2.5.0 指標卡片互動
+
+每日概況的 9 張指標卡片現在可點擊，也支援鍵盤焦點。點選後，下方趨勢區會切換到該指標，並依資料性質顯示區間合計、區間平均或最近量測。身高、體重與 BMI 的趨勢只畫實際量測點，不會把沿用值誤當成每天量測。
 
 ## 2.4.0 身體測量
 

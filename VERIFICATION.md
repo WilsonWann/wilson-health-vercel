@@ -3,7 +3,7 @@
 日期：2026-10-25；執行環境：Node.js 22.16.0（部署設定為 24.x）。
 
 已實際執行：
-- npm test：100 tests，100 pass，0 fail。
+- npm test：101 tests，101 pass，0 fail。
 - npm run build / check：JavaScript 語法檢查通過。
 - 原有 56 項本地測試保留並改為非同步 Store 介面。
 - 新增 Vercel 路由、已解析的 body、4 MB 程式內限制、遠端資料庫必填、Cron GET 驗證與停用保護、固定排程欄位。
@@ -29,10 +29,10 @@
 
 - 2.6.3: verified passwordless guest submit is not blocked by native HTML required validation.
 
-- 2.7.0：新增 LINE Login QR 收件人綁定回歸測試；驗證 token-only LINE 設定、短效 state/nonce、authorization URL、callback token exchange、ID token verify、friendship status 與收件人 User ID 自動寫回。
+- 3.0.1：LINE Login 改用 LINE 官方 QR Login 頁；回歸測試驗證 QR 優先參數、callback token exchange、ID token verify、friendship status、收件人綁定與 callback 直接建立網站 session。
 - QR/LINE Login 測試使用 fetch mock，沒有連真實 LINE 平台；正式部署仍需設定真實 LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET 與 Callback URL。
 
-## 3.0.0 LINE Login QR
+## 3.0.1 LINE Login QR
 
 - 帳號密碼登入回歸保持通過。
 - LINE Login QR start 產生 server-side SVG QR 與短效 state/nonce/poll secret。

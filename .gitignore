@@ -9,5 +9,3 @@ node_modules/
 *private*.json
 *backup*.json
 .DS_Store
-.vercel
-.env*

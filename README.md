@@ -1,4 +1,4 @@
-# Wilson 健康日報 3.0 — Vercel 部署版（程式版本 3.0.0）
+# Wilson 健康日報 3.0 — Vercel 部署版（程式版本 3.0.1）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
 **這是原始碼，不代表已經建立 Vercel 服務。依本次要求，壓縮包內的本機 `.env` 已寫入提供的 Messaging API Channel access token；`.env` 同時被 `.gitignore` 與 `.vercelignore` 排除。其他私人環境變數仍需自行合併/設定。**
@@ -70,29 +70,36 @@ Range: Previous 7 Days
 
 ## LINE Login、綁定與排程
 
-3.0.0 提供兩種登入方式：
+3.0.1 提供兩種登入方式：
 
-1. **LINE Login**：點「使用 LINE Login」後，登入卡片直接切換成短效 QR Code；手機 LINE 掃描並完成授權後，桌面自動登入。
-2. **帳號／密碼**：保留既有 admin / guest 流程。第一次使用 LINE Login 前，admin 必須先用帳密登入，在「LINE 連線」區掃一次 QR 綁定自己的 LINE 帳號。未綁定的 LINE 帳號不能直接登入私人儀表板。
+1. **LINE 官方 QR Login**：點「使用 LINE QR Code 登入」後，瀏覽器直接前往 LINE 官方授權頁；LINE 官方頁面預設顯示 QR Code。使用者以手機 LINE 掃描並完成驗證後，LINE callback 會回到健康日報並直接建立網站 Session。
+2. **帳號／密碼**：保留既有 admin / guest 流程。第一次使用 LINE Login 前，admin 必須先用帳密登入，在「LINE 連線」區完成一次 LINE 官方 QR 綁定。未綁定的 LINE 帳號不能直接登入私人儀表板。
 
-帳密登入後的 LINE 綁定也使用同一個 LINE Login Channel：點「LINE Login 綁定」→ 頁內顯示 QR Code → 手機授權 → 後端驗證 ID token 的 `sub`（LINE userId）→ 綁定到 admin 帳號，同時作為日報收件人。
+帳密登入後的 LINE 綁定也使用同一個 LINE Login Channel：點「用 LINE QR Code 綁定」→ 前往 LINE 官方 QR Login 頁 → 手機授權 → 後端驗證 ID token 的 `sub`（LINE userId）→ 綁定到 admin 帳號，同時作為日報收件人。
 
-### LINE 3.0 前置設定
+### LINE 3.0.1 前置設定
 
 1. 在 LINE Developers 的**同一個 Provider**下保留 Messaging API Channel，並建立 LINE Login Channel。
 2. LINE Login Channel 的 Basic settings → **Linked LINE Official Account**，連結目前的 Wilson 健康日報官方帳號。
 3. LINE Login Channel 的 Web app Callback URL 加入：
    `https://你的-production-domain/api/line/auth/callback`
-4. Vercel Production Environment Variables 設定：
+4. LINE Login Channel 的 LINE Login 設定中，若希望 QR Login 強制使用二階段驗證，開啟 **Require two-factor authentication**。
+5. Vercel Production Environment Variables 設定：
    - `LINE_CHANNEL_ACCESS_TOKEN`
    - `LINE_LOGIN_CHANNEL_ID`
    - `LINE_LOGIN_CHANNEL_SECRET`
-5. Redeploy。
-6. 第一次先以 admin 帳密登入 → LINE 連線 →「LINE Login 綁定」→ 掃 QR；之後首頁即可直接「使用 LINE Login」掃 QR 登入。
+6. Redeploy。
+7. 第一次先以 admin 帳密登入 → LINE 連線 →「用 LINE QR Code 綁定」→ 完成 LINE 官方 QR Login；之後首頁即可直接用 LINE 官方 QR Login 登入。
 
-LINE Login 使用 OAuth 2.0 authorization code + OpenID Connect；每次 QR 使用短效 `state`、`nonce` 與不會放進 QR 的 polling secret。登入 QR 只有已綁定帳號能換成網站 Session，避免陌生 LINE 帳號直接取得私人資料。授權 URL 帶 `bot_prompt=normal`，若 Login Channel 已連結官方帳號，可在登入流程提供加好友選項。
+LINE Login 使用 OAuth 2.0 authorization code + OpenID Connect。授權 URL 帶：
 
-`LINE_CHANNEL_ACCESS_TOKEN` 只決定「哪個官方帳號發訊息」，不放入 QR、不傳到前端；收件人 User ID 由 LINE Login 綁定取得。網站前端不再提供 Channel token 或 `U...` User ID 的手動輸入欄位。
+- `initial_amr_display=lineqr`：預設顯示 QR Login
+- `switch_amr=false`：隱藏切換 Email/password 的按鈕
+- `disable_auto_login=true`：避免 Auto Login 跳過預期的 QR 流程
+- `ui_locales=zh-TW`：繁體中文介面
+- `bot_prompt=normal`：若 Login Channel 已連結官方帳號，可在登入流程提供加好友選項
+
+`LINE_CHANNEL_ACCESS_TOKEN` 只決定「哪個官方帳號發訊息」，不出現在 LINE Login QR、不傳到前端；收件人 User ID 由 LINE Login 綁定取得。網站前端不提供 Channel token 或 `U...` User ID 的手動輸入欄位。
 
 只在你點選確認後發送測試/日報；自動發送在新資料庫預設關閉。`vercel.json` 的 cron：`0 1 * * *`，也就是台北每日 09:00。Hobby 每日排程有小時級精度，不能保證 09:00 整。
 
@@ -173,21 +180,12 @@ Guest 是真正的後端唯讀角色，不只是前端把按鈕反灰：
 - Static CSS/JS URLs include the 2.6.3 version query to make deployed version changes obvious and reduce stale-asset confusion.
 
 
-## 2.7.0 LINE QR 收件人綁定
-
-- 移除 LINE User ID 的手動輸入欄位。
-- 以 LINE Login authorization code flow 取得並驗證日報收件人的 LINE userId。
-- QR 掃描使用 LINE 官方登入頁；後端保存短效 state/nonce challenge，桌面輪詢綁定結果。
-- Channel access token 可先單獨儲存；只有收件人綁定後才允許測試發送/日報發送。
-- Guest 無權建立或查詢 LINE 綁定。
 
 
-## 3.0.0 LINE Login QR authentication
+## 3.0.1 LINE 官方 QR Login
 
-- 登入頁新增 LINE Login，點擊後直接在頁內顯示短效 QR Code。
-- 保留帳號密碼登入。
-- admin 首次需以帳密登入後掃 QR 綁定；綁定後同一 LINE 帳號可用 QR 直接登入。
-- LINE 綁定後的 userId 同時作為日報收件人。
-- Messaging API Channel access token 改由 `LINE_CHANNEL_ACCESS_TOKEN` 後端環境變數管理，UI 不再顯示或修改。
-- 未綁定的 LINE userId 不能登入私人儀表板。
-- QR 由本地 vendor QR encoder 產生，不把 OAuth URL 傳給第三方 QR 服務。
+- 不再自行產生 OAuth QR Code，也不再使用桌面 polling。
+- 登入與 LINE 綁定都直接導向 LINE 官方授權頁。
+- LINE 官方頁面使用 `initial_amr_display=lineqr`、`switch_amr=false`、`disable_auto_login=true`，優先顯示 QR Login。
+- 手機完成 LINE 驗證後，callback 直接建立網站 Session（登入）或寫入 LINE 綁定（bind），再導回健康日報。
+- 未綁定的 LINE userId 仍不能登入私人儀表板。

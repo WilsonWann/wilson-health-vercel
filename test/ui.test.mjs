@@ -42,10 +42,10 @@ test('date select uses an inset custom arrow',()=>{
 });
 
 
-test('LINE Login QR is available at login and in admin binding UI without exposing token fields',()=>{
-  assert.match(html,/id="showLineLogin"/);assert.match(html,/id="loginQrPanel"/);assert.match(html,/id="loginQr"/);
-  assert.match(html,/id="lineQrLink"/);assert.match(html,/LINE Login 綁定/);assert.match(html,/LINE_CHANNEL_ACCESS_TOKEN/);
+test('LINE Login uses LINE official QR page at login and binding without exposing token fields',()=>{
+  assert.match(html,/id="showLineLogin"/);assert.doesNotMatch(html,/id="loginQrPanel"/);assert.doesNotMatch(html,/id="loginQr"/);
+  assert.match(html,/id="lineQrLink"/);assert.match(html,/LINE QR Code 綁定/);assert.match(html,/LINE_CHANNEL_ACCESS_TOKEN/);
   assert.doesNotMatch(html,/id="userId"/);assert.doesNotMatch(html,/id="token"/);
-  assert.match(app,/\/api\/line\/login\/start/);assert.match(app,/\/api\/line\/login\/status/);
-  assert.match(app,/\/api\/line\/bind\/start/);assert.match(app,/renderQr/);assert.doesNotMatch(app,/window\.open\('about:blank'/);
+  assert.match(app,/\/api\/line\/login\/start/);assert.match(app,/location\.assign\(r\.authorizeUrl\)/);
+  assert.match(app,/\/api\/line\/bind\/start/);assert.doesNotMatch(app,/renderQr/);assert.doesNotMatch(app,/pollLine/);
 });

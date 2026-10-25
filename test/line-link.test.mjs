@@ -14,7 +14,7 @@ function mockLineFetcher(calls){return async(url,opts={})=>{
   if(url==='https://api.line.me/oauth2/v2.1/token')return new Response(JSON.stringify({access_token:'user-access-token',id_token:'mock-id-token'}),{status:200,headers:{'content-type':'application/json'}});
   if(url==='https://api.line.me/oauth2/v2.1/verify'){
     const body=new URLSearchParams(String(opts.body));
-    return new Response(JSON.stringify({sub:'U'+'b'.repeat(32),name:'QR User',nonce:body.get('nonce')}),{status:200,headers:{'content-type':'application/json'}});
+    return new Response(JSON.stringify({sub:'U'+'b'.repeat(32),name:'QR User',nonce:body.get('nonce'),amr:['lineqr','mfa']}),{status:200,headers:{'content-type':'application/json'}});
   }
   if(url==='https://api.line.me/friendship/v1/status')return new Response(JSON.stringify({friendFlag:true}),{status:200,headers:{'content-type':'application/json'}});
   if(url==='https://api.line.me/v2/bot/info')return new Response(JSON.stringify({displayName:'Health Bot'}),{status:200,headers:{'content-type':'application/json'}});
@@ -28,38 +28,37 @@ async function boot(t,overrides={}){
   return {app,calls,base:'http://127.0.0.1:'+app.server.address().port};
 }
 
-test('admin binds LINE by inline QR and can later log in by LINE QR',async t=>{
+async function responseBody(r){const type=r.headers.get('content-type')||'';return type.includes('json')?await r.json():await r.text();}
+
+test('admin binds LINE through official LINE QR Login and can later log in by official QR',async t=>{
   const {app,calls,base}=await boot(t);let cookie='',csrf='';
   async function req(path,{method='GET',body,auth=true,cookieOverride}={}){
     const useCookie=cookieOverride!==undefined?cookieOverride:cookie;
     const headers={...(auth&&useCookie?{Cookie:useCookie}:{}),...(body===undefined?{}:{'Content-Type':'application/json',Origin:base,...(auth&&csrf?{'X-CSRF-Token':csrf}:{})})};
     const r=await fetch(base+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),redirect:'manual'});
-    const type=r.headers.get('content-type')||'';const value=type.includes('json')?await r.json():await r.text();return {r,body:value};
+    return {r,body:await responseBody(r)};
   }
   const login=await req('/api/login',{method:'POST',body:{username:'admin',password:config.password}});cookie=login.r.headers.get('set-cookie').split(';')[0];csrf=login.body.csrf;
-  const stateBefore=await req('/api/state?from=2026-10-25&to=2026-10-25');assert.equal(stateBefore.body.settings.lineConfigured,true);assert.equal(stateBefore.body.settings.recipientConfigured,false);assert.equal(stateBefore.body.settings.lineTokenFromEnv,true);
-
-  const start=await req('/api/line/bind/start',{method:'POST',body:{}});assert.equal(start.r.status,200);assert.match(start.body.qrSvg,/^<svg/);assert.ok(start.body.qrSvg.length>500);
-  const authorize=new URL(start.body.authorizeUrl);assert.equal(authorize.origin,'https://access.line.me');assert.equal(authorize.searchParams.get('client_id'),config.lineLoginChannelId);assert.equal(authorize.searchParams.get('scope'),'openid profile');assert.equal(authorize.searchParams.get('bot_prompt'),'normal');assert.equal(authorize.searchParams.get('state'),start.body.state);
-  const callback=await req('/api/line/auth/callback?code=auth-code&state='+start.body.state,{auth:false});assert.equal(callback.r.status,200);assert.match(callback.body,/LINE 綁定完成/);
-  const status=await req('/api/line/bind/status?state='+start.body.state);assert.equal(status.body.status,'complete');assert.equal(status.body.displayName,'QR User');assert.equal(status.body.friendFlag,true);assert.match(status.body.userId,/^Ubbbbb…bbbb$/);
+  const start=await req('/api/line/bind/start',{method:'POST',body:{}});assert.equal(start.r.status,200);assert.equal(start.body.qrSvg,undefined);assert.equal(start.body.pollToken,undefined);
+  const authorize=new URL(start.body.authorizeUrl);assert.equal(authorize.origin,'https://access.line.me');assert.equal(authorize.searchParams.get('client_id'),config.lineLoginChannelId);assert.equal(authorize.searchParams.get('scope'),'openid profile');assert.equal(authorize.searchParams.get('bot_prompt'),'normal');assert.equal(authorize.searchParams.get('initial_amr_display'),'lineqr');assert.equal(authorize.searchParams.get('switch_amr'),'false');assert.equal(authorize.searchParams.get('disable_auto_login'),'true');assert.equal(authorize.searchParams.get('ui_locales'),'zh-TW');
+  const callback=await req('/api/line/auth/callback?code=auth-code&state='+start.body.state,{auth:false});assert.equal(callback.r.status,302);assert.match(callback.r.headers.get('location'),/^\/?\?line=bound#line$/i);
   const binding=await app.store.accountLineBinding('admin');assert.equal(binding.user_id,'U'+'b'.repeat(32));assert.equal(binding.role,'admin');
-  const state=await req('/api/state?from=2026-10-25&to=2026-10-25');assert.equal(state.body.settings.recipientConfigured,true);assert.match(state.body.settings.maskedUserId,/^Ubbbbb…bbbb$/);
+  const state=await req('/api/state?from=2026-10-25&to=2026-10-25');assert.equal(state.body.settings.recipientConfigured,true);
 
-  // New browser: QR login is only accepted after that LINE account has been bound.
+  // New desktop browser: official LINE QR login returns to the same callback and directly sets our session cookie.
   cookie='';csrf='';
-  const lineStart=await req('/api/line/login/start',{method:'POST',body:{},auth:false});assert.equal(lineStart.r.status,200);assert.match(lineStart.body.qrSvg,/^<svg/);
-  const loginCallback=await req('/api/line/auth/callback?code=auth-code-2&state='+lineStart.body.state,{auth:false});assert.equal(loginCallback.r.status,200);assert.match(loginCallback.body,/LINE Login 已授權/);
-  const poll=await req('/api/line/login/status',{method:'POST',body:{state:lineStart.body.state,pollToken:lineStart.body.pollToken},auth:false});assert.equal(poll.r.status,200);assert.equal(poll.body.status,'complete');assert.equal(poll.body.role,'admin');assert.equal(poll.body.username,'admin');
-  const lineCookie=poll.r.headers.get('set-cookie').split(';')[0];const session=await req('/api/session',{auth:true,cookieOverride:lineCookie});assert.equal(session.body.authenticated,true);assert.equal(session.body.role,'admin');
+  const lineStart=await req('/api/line/login/start',{method:'POST',body:{},auth:false});assert.equal(lineStart.r.status,200);assert.equal(lineStart.body.qrSvg,undefined);
+  const loginAuthorize=new URL(lineStart.body.authorizeUrl);assert.equal(loginAuthorize.searchParams.get('initial_amr_display'),'lineqr');assert.equal(loginAuthorize.searchParams.get('switch_amr'),'false');
+  const loginCallback=await req('/api/line/auth/callback?code=auth-code-2&state='+lineStart.body.state,{auth:false});assert.equal(loginCallback.r.status,302);assert.equal(loginCallback.r.headers.get('location'),'/?line=login-ok');
+  const lineCookie=loginCallback.r.headers.get('set-cookie').split(';')[0];
+  const session=await req('/api/session',{auth:true,cookieOverride:lineCookie});assert.equal(session.body.authenticated,true);assert.equal(session.body.role,'admin');
   assert.ok(calls.some(c=>c.url==='https://api.line.me/oauth2/v2.1/token'));assert.ok(calls.some(c=>c.url==='https://api.line.me/oauth2/v2.1/verify'));
 });
 
 test('unbound LINE account cannot directly enter the private dashboard',async t=>{
   const {base}=await boot(t);const headers={'Content-Type':'application/json',Origin:base};
   let r=await fetch(base+'/api/line/login/start',{method:'POST',headers,body:'{}'});const started=await r.json();assert.equal(r.status,200);
-  r=await fetch(base+'/api/line/auth/callback?code=auth-code&state='+started.state,{redirect:'manual'});assert.equal(r.status,400);assert.match(await r.text(),/LINE 尚未綁定/);
-  r=await fetch(base+'/api/line/login/status',{method:'POST',headers,body:JSON.stringify({state:started.state,pollToken:started.pollToken})});const status=await r.json();assert.equal(status.status,'failed');assert.match(status.error,/尚未綁定/);
+  r=await fetch(base+'/api/line/auth/callback?code=auth-code&state='+started.state,{redirect:'manual'});assert.equal(r.status,302);assert.equal(r.headers.get('location'),'/?line=unbound');assert.equal(r.headers.get('set-cookie'),null);
 });
 
 test('LINE QR is unavailable without LINE Login channel configuration',async t=>{

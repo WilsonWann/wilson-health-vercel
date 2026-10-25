@@ -7,7 +7,10 @@ const schema=[
   `CREATE TABLE IF NOT EXISTS sessions_v2(hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL,role TEXT NOT NULL) STRICT`,
   `CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,retry_key TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,attempt_at TEXT NOT NULL,error TEXT) STRICT`,
   `CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,event TEXT NOT NULL,message TEXT NOT NULL,created_at TEXT NOT NULL) STRICT`,
-  `CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY,count INTEGER NOT NULL,until_ms INTEGER NOT NULL) STRICT`
+  `CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY,count INTEGER NOT NULL,until_ms INTEGER NOT NULL) STRICT`,
+  `CREATE TABLE IF NOT EXISTS line_link_challenges(state TEXT PRIMARY KEY,nonce TEXT NOT NULL,session_hash TEXT NOT NULL,status TEXT NOT NULL,user_id TEXT,display_name TEXT,friend_flag INTEGER,expires INTEGER NOT NULL,created_at TEXT NOT NULL,error TEXT) STRICT`,
+  `CREATE TABLE IF NOT EXISTS account_line_bindings(account TEXT PRIMARY KEY,role TEXT NOT NULL,user_id TEXT NOT NULL UNIQUE,display_name TEXT,linked_at TEXT NOT NULL) STRICT`,
+  `CREATE TABLE IF NOT EXISTS line_auth_challenges_v3(state TEXT PRIMARY KEY,nonce TEXT NOT NULL,purpose TEXT NOT NULL,session_hash TEXT,poll_hash TEXT NOT NULL,status TEXT NOT NULL,user_id TEXT,display_name TEXT,friend_flag INTEGER,account TEXT,role TEXT,expires INTEGER NOT NULL,created_at TEXT NOT NULL,error TEXT) STRICT`
 ];
 export async function openStore(config,{client}={}) {
   if(!client) {
@@ -39,6 +42,34 @@ export class Store {
   }
   close(){this.client.close();}
   async settings(){return this.db.prepare('SELECT * FROM settings WHERE id=1').get();}
+  async accountLineBinding(account){return this.db.prepare('SELECT * FROM account_line_bindings WHERE account=?').get(account);}
+  async accountLineBindingByUserId(userId){return this.db.prepare('SELECT * FROM account_line_bindings WHERE user_id=?').get(userId);}
+  async bindLineAccount({account,role,userId,displayName,linkedAt}){
+    await this.db.prepare(`INSERT INTO account_line_bindings(account,role,user_id,display_name,linked_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(account) DO UPDATE SET role=excluded.role,user_id=excluded.user_id,display_name=excluded.display_name,linked_at=excluded.linked_at`).run(account,role,userId,displayName||'',linkedAt);
+  }
+  async createLineAuthChallenge({state,nonce,purpose,sessionHash,pollHash,expires,createdAt}){
+    await this.db.prepare('DELETE FROM line_auth_challenges_v3 WHERE expires<?').run(Date.parse(createdAt));
+    if(sessionHash)await this.db.prepare(`DELETE FROM line_auth_challenges_v3 WHERE session_hash=? AND status='pending'`).run(sessionHash);
+    await this.db.prepare(`INSERT INTO line_auth_challenges_v3(state,nonce,purpose,session_hash,poll_hash,status,expires,created_at)
+      VALUES(?,?,?,?,?,'pending',?,?)`).run(state,nonce,purpose,sessionHash||null,pollHash,expires,createdAt);
+  }
+  async lineAuthChallenge(state){return this.db.prepare('SELECT * FROM line_auth_challenges_v3 WHERE state=?').get(state);}
+  async completeLineAuthChallenge(state,{userId,displayName,friendFlag,account,role}){
+    await this.db.prepare(`UPDATE line_auth_challenges_v3 SET status='complete',user_id=?,display_name=?,friend_flag=?,account=?,role=?,error=NULL WHERE state=?`)
+      .run(userId,displayName||'',friendFlag==null?null:friendFlag?1:0,account||null,role||null,state);
+  }
+  async failLineAuthChallenge(state,message){await this.db.prepare(`UPDATE line_auth_challenges_v3 SET status='failed',error=? WHERE state=?`).run(String(message||'LINE 授權失敗').slice(0,400),state);}
+
+  async createLineLinkChallenge({state,nonce,sessionHash,expires,createdAt}){
+    await this.db.prepare(`DELETE FROM line_link_challenges WHERE expires<? OR (session_hash=? AND status='pending')`).run(Date.parse(createdAt),sessionHash);
+    await this.db.prepare(`INSERT INTO line_link_challenges(state,nonce,session_hash,status,expires,created_at) VALUES(?,?,?,'pending',?,?)`).run(state,nonce,sessionHash,expires,createdAt);
+  }
+  async lineLinkChallenge(state){return this.db.prepare('SELECT * FROM line_link_challenges WHERE state=?').get(state);}
+  async completeLineLink(state,{userId,displayName,friendFlag}){
+    await this.db.prepare(`UPDATE line_link_challenges SET status='complete',user_id=?,display_name=?,friend_flag=?,error=NULL WHERE state=?`).run(userId,displayName||'',friendFlag==null?null:friendFlag?1:0,state);
+  }
+  async failLineLink(state,message){await this.db.prepare(`UPDATE line_link_challenges SET status='failed',error=? WHERE state=?`).run(String(message||'LINE 綁定失敗').slice(0,400),state);}
   async credentials(){
     const value=(await this.settings()).credentials;if(!value)return null;
     const [iv,tag,body]=value.split('.').map(v=>Buffer.from(v,'base64'));

@@ -1,7 +1,7 @@
-# Wilson 健康日報 2.0 — Vercel 部署版（程式版本 2.6.1）
+# Wilson 健康日報 3.0 — Vercel 部署版（程式版本 3.0.0）
 
 這份沿用 2.0 網頁與健康解析邏輯，改為 Vercel Functions + 遠端 Turso/libSQL。
-**這是原始碼，不代表已經建立 Vercel 服務。沒有包含密碼、LINE Token、真實健康 JSON 或資料庫。**
+**這是原始碼，不代表已經建立 Vercel 服務。依本次要求，壓縮包內的本機 `.env` 已寫入提供的 Messaging API Channel access token；`.env` 同時被 `.gitignore` 與 `.vercelignore` 排除。其他私人環境變數仍需自行合併/設定。**
 
 ## 最短部署流程
 
@@ -26,6 +26,9 @@
 | CRON_SECRET | 至少 32 字元的獨立排程金鑰 |
 | TURSO_DATABASE_URL | 遠端 libSQL 的 `libsql://...` 或 HTTPS URL |
 | TURSO_AUTH_TOKEN | 該遠端資料庫的可讀寫 Token，不是 Vercel Token |
+| LINE_CHANNEL_ACCESS_TOKEN | Messaging API Channel access token；代表官方帳號發送訊息，只存在後端環境變數 |
+| LINE_LOGIN_CHANNEL_ID | LINE Login Channel ID；用於首頁 QR 登入與帳密登入後的 QR 綁定 |
+| LINE_LOGIN_CHANNEL_SECRET | LINE Login Channel Secret；只放後端環境變數，不放前端 |
 
 `APP_ORIGIN` 選填；留白時由 Vercel 的 project/preview system variables 推斷。自訂網域時設成 `https://health.example.com`（不含路徑）。如果登入出現跨站錯誤，檢查目前網址是否為 Production Domain，並讓 APP_ORIGIN 與實際開啟的網址一致。
 
@@ -65,19 +68,35 @@ Range: Previous 7 Days
 
 **iPhone 上傳與 LINE 推播是兩個不同排程。** Vercel 不會讀取手機內的 HealthKit。手機上傳時間仍受 iOS 背景執行、鎖定和權限影響，不能保證某個分鐘收到全部資料。
 
-## LINE 與排程
+## LINE Login、綁定與排程
 
-登入網頁 → LINE 設定 → 輸入既有 LINE Channel access token 和 U 開頭個人 User ID → 儲存 → 驗證。
-只在你點選確認後發送測試/日報；自動發送在新資料庫預設關閉。
-LINE 憑證用 APP_KEY 進行 AES-256-GCM 加密，登入 Session、匯入與發送紀錄也保存在遠端資料庫，不依賴某台函式的記憶體。
+3.0.0 提供兩種登入方式：
 
-`vercel.json` 的 cron：`0 1 * * *`，也就是台北每日 09:00；Vercel 呼叫 GET `/api/cron` 並帶 CRON_SECRET。
-Hobby 每日排程有小時級精度，不能保證 09:00 整。網頁時間欄在 Vercel 固定 09:00，避免改表單卻沒改平台排程。
-要更改時間需同時修改 vercel.json 和程式內 fixedReportTime/驗證規則。
+1. **LINE Login**：點「使用 LINE Login」後，登入卡片直接切換成短效 QR Code；手機 LINE 掃描並完成授權後，桌面自動登入。
+2. **帳號／密碼**：保留既有 admin / guest 流程。第一次使用 LINE Login 前，admin 必須先用帳密登入，在「LINE 連線」區掃一次 QR 綁定自己的 LINE 帳號。未綁定的 LINE 帳號不能直接登入私人儀表板。
+
+帳密登入後的 LINE 綁定也使用同一個 LINE Login Channel：點「LINE Login 綁定」→ 頁內顯示 QR Code → 手機授權 → 後端驗證 ID token 的 `sub`（LINE userId）→ 綁定到 admin 帳號，同時作為日報收件人。
+
+### LINE 3.0 前置設定
+
+1. 在 LINE Developers 的**同一個 Provider**下保留 Messaging API Channel，並建立 LINE Login Channel。
+2. LINE Login Channel 的 Basic settings → **Linked LINE Official Account**，連結目前的 Wilson 健康日報官方帳號。
+3. LINE Login Channel 的 Web app Callback URL 加入：
+   `https://你的-production-domain/api/line/auth/callback`
+4. Vercel Production Environment Variables 設定：
+   - `LINE_CHANNEL_ACCESS_TOKEN`
+   - `LINE_LOGIN_CHANNEL_ID`
+   - `LINE_LOGIN_CHANNEL_SECRET`
+5. Redeploy。
+6. 第一次先以 admin 帳密登入 → LINE 連線 →「LINE Login 綁定」→ 掃 QR；之後首頁即可直接「使用 LINE Login」掃 QR 登入。
+
+LINE Login 使用 OAuth 2.0 authorization code + OpenID Connect；每次 QR 使用短效 `state`、`nonce` 與不會放進 QR 的 polling secret。登入 QR 只有已綁定帳號能換成網站 Session，避免陌生 LINE 帳號直接取得私人資料。授權 URL 帶 `bot_prompt=normal`，若 Login Channel 已連結官方帳號，可在登入流程提供加好友選項。
+
+`LINE_CHANNEL_ACCESS_TOKEN` 只決定「哪個官方帳號發訊息」，不放入 QR、不傳到前端；收件人 User ID 由 LINE Login 綁定取得。網站前端不再提供 Channel token 或 `U...` User ID 的手動輸入欄位。
+
+只在你點選確認後發送測試/日報；自動發送在新資料庫預設關閉。`vercel.json` 的 cron：`0 1 * * *`，也就是台北每日 09:00。Hobby 每日排程有小時級精度，不能保證 09:00 整。
 
 每日僅處理前一天且已有步數的真實資料。未啟用、未驗證、缺步數或已發送則略過，結果保存在 events。
-若當次因手機尚未同步而略過，本版不安排第二次自動補發；資料到齊後可在網頁預覽並手動發送。
-不使用常駐 `setInterval`，也不依賴 ChatGPT 任務。GET `/api/jobs/daily` 只讀紀錄；GET `/api/cron` 才是平台的受保護排程執行入口。
 
 ## 搬移資料：不會自動讀到 1.0 或 Mac 資料庫
 
@@ -152,3 +171,23 @@ Guest 是真正的後端唯讀角色，不只是前端把按鈕反灰：
 - Guest can submit an empty password without browser-level blocking.
 - Username presence is validated by application code; credentials are still verified server-side.
 - Static CSS/JS URLs include the 2.6.3 version query to make deployed version changes obvious and reduce stale-asset confusion.
+
+
+## 2.7.0 LINE QR 收件人綁定
+
+- 移除 LINE User ID 的手動輸入欄位。
+- 以 LINE Login authorization code flow 取得並驗證日報收件人的 LINE userId。
+- QR 掃描使用 LINE 官方登入頁；後端保存短效 state/nonce challenge，桌面輪詢綁定結果。
+- Channel access token 可先單獨儲存；只有收件人綁定後才允許測試發送/日報發送。
+- Guest 無權建立或查詢 LINE 綁定。
+
+
+## 3.0.0 LINE Login QR authentication
+
+- 登入頁新增 LINE Login，點擊後直接在頁內顯示短效 QR Code。
+- 保留帳號密碼登入。
+- admin 首次需以帳密登入後掃 QR 綁定；綁定後同一 LINE 帳號可用 QR 直接登入。
+- LINE 綁定後的 userId 同時作為日報收件人。
+- Messaging API Channel access token 改由 `LINE_CHANNEL_ACCESS_TOKEN` 後端環境變數管理，UI 不再顯示或修改。
+- 未綁定的 LINE userId 不能登入私人儀表板。
+- QR 由本地 vendor QR encoder 產生，不把 OAuth URL 傳給第三方 QR 服務。

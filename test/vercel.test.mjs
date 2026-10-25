@@ -25,6 +25,12 @@ test('Vercel origin is inferred from the stable production domain',()=>{
 });
 test('explicit custom APP_ORIGIN overrides inference, strips trailing slash',()=>assert.equal(configFromEnv({APP_ORIGIN:'https://health.example/'}).origin,'https://health.example'));
 test('preview deployment uses its own domain',()=>assert.equal(configFromEnv({VERCEL:'1',VERCEL_ENV:'preview',VERCEL_URL:'test.vercel.app',VERCEL_PROJECT_PRODUCTION_URL:'prod.vercel.app'}).origin,'https://test.vercel.app'));
+
+test('LINE Messaging and LINE Login environment variables are exposed to the app config',()=>{
+ const c=configFromEnv({LINE_CHANNEL_ACCESS_TOKEN:'fixture-channel-token-1234567890',LINE_LOGIN_CHANNEL_ID:'1234567890',LINE_LOGIN_CHANNEL_SECRET:'fixture-secret-1234567890'});
+ assert.equal(c.lineChannelAccessToken,'fixture-channel-token-1234567890');assert.equal(c.lineLoginChannelId,'1234567890');assert.equal(c.lineLoginChannelSecret,'fixture-secret-1234567890');
+});
+
 test('route adapter keeps from/to parameters without exposing a second ingest path',()=>assert.equal(normalizeRoute('/api/index?__route=state&from=2026-10-18&to=2026-10-24'),'/api/state?from=2026-10-18&to=2026-10-24'));
 test('route adapter also accepts the original route',()=>assert.equal(normalizeRoute('/api/ingest'),'/api/ingest'));
 test('invalid rewritten route rejected',()=>assert.throws(()=>normalizeRoute('/api/index?__route=../.env')));
@@ -78,6 +84,6 @@ test('batch writes roll back completely if one DB statement fails',async t=>{
  assert.equal((await s.samples()).length,0);
 });
 test('Vercel config uses daily UTC cron and excludes all local secrets',()=>{
- const v=JSON.parse(readFileSync(new URL('../vercel.json',import.meta.url)));assert.deepEqual(v.crons,[{path:'/api/cron',schedule:'0 1 * * *'}]);
+ const v=JSON.parse(readFileSync(new URL('../vercel.json',import.meta.url)));assert.deepEqual(v.crons,[{path:'/api/cron',schedule:'0 1 * * *'}]);assert.match(v.functions['api/index.mjs'].includeFiles,/src\/vendor/);
  const ignore=readFileSync(new URL('../.vercelignore',import.meta.url),'utf8');assert.match(ignore,/\.env\n/);assert.match(ignore,/data\n/);assert.match(ignore,/private/);
 });

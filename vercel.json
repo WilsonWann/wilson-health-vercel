@@ -5,7 +5,7 @@
   "outputDirectory": "public",
   "functions": {
     "api/index.mjs": {
-      "includeFiles": "public/**",
+      "includeFiles": "{public,src/vendor}/**",
       "maxDuration": 60
     }
   },

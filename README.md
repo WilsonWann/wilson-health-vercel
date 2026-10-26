@@ -1,6 +1,29 @@
-# Wilson 健康日報 4.0.2
+# Wilson 健康日報 4.0.3
 
 Vercel + Turso 的多人健康資料儀表板。一般會員以 **LINE 官方 QR Login** 登入；身分只由後端驗證 LINE ID token 後的 `sub` 決定。前端不能指定或切換成其他會員。管理者與 Guest 仍使用帳號密碼。
+
+## 4.0.3 修正 LINE SSO 與 QR 驗證衝突
+
+4.0.2 以 `disable_auto_login=true`、`initial_amr_display=lineqr` 顯示登入頁，但未指定 `prompt=login`。LINE 仍可能顯示記住帳號的「Continue as」SSO 頁面。按下 Log in 後，後端的 QR 限制會拒絕 `amr=linesso`，而舊 callback 頁只顯示通用失敗訊息。
+
+本版保留一般會員必須以 QR 登入的要求：
+
+- 授權 URL 加上 `prompt=login`，要求既有 LINE SSO session 重新驗證。
+- 前端不再接續缺少此參數的舊授權 URL，提示重新產生 QR Code。
+- SSO、授權碼失效、頻道設定、nonce 驗證及資料處理失敗提供不同錯誤代碼與參考編號。
+- `/logs` 與 Vercel Logs 的 `line_auth_failed` 記錄包含階段、代碼、參考編號與已驗證登入方法，不記錄 token、授權碼、nonce、state 或原始外部錯誤內容。
+- callback 失敗頁不再顯示「系統會自動接續登入」；返回按鈕會切回原登入視窗。
+- optional 操作紀錄寫入失敗不再把已完成的身分驗證改成失敗。
+- 補上 Vercel 的 `/healthz` 路由，亦可用 `/api/healthz` 查詢 `4.0.3-vercel`。
+
+健康日報登出會清除本站 session；LINE 的 SSO Cookie 由 `access.line.me` 管理，可能繼續保留。本版要求重新驗證，不依賴清除 LINE 的全站 Cookie。
+
+參考 LINE 官方文件：
+
+- [授權參數、prompt=login 與 SSO Cookie](https://developers.line.biz/en/docs/line-login/integrate-line-login/)
+- [ID token 的 lineqr / linesso 等 amr 值](https://developers.line.biz/en/docs/line-login/verify-id-token/)
+
+完整更新本 ZIP 並重新部署後，請從登入頁重新產生 QR Code，確認版本及實際登入結果。舊版 URL 不應重用。本次測試使用模擬 LINE 服務，未連線讀取正式環境的特定失敗記錄。
 
 ## 4.0.2 LINE 登入穩定性與流程
 
@@ -27,7 +50,7 @@ LINE 官方 QR Login 的有效期與手機授權仍由 LINE 控制。本次使�
 - 舊會員網址 `#line` 會定位至 `#userLine`，`#import` 會定位至 `#userSync`；大小寫會正規化。無權限或無效錨點會返回健康總覽。
 - 導覽會定位到區塊開頭並移動鍵盤焦點，且遵循系統的減少動態效果偏好。
 
-將本 ZIP **完整內容**更新至原 Vercel 專案並重新部署，保留原環境變數與 Turso 資料庫。靜態資源版本參數已更新，部署後可用 `/healthz` 確認 `4.0.2-vercel`。
+將本 ZIP **完整內容**更新至原 Vercel 專案並重新部署，保留原環境變數與 Turso 資料庫。靜態資源版本參數已更新，部署後可用 `/healthz` 確認 `4.0.3-vercel`。
 
 ## 4.0.0 核心模型
 
@@ -51,6 +74,7 @@ guest + optional empty password → role=guest → Mock Data only
 
 會員登入授權 URL 強制使用：
 
+- `prompt=login`
 - `initial_amr_display=lineqr`
 - `switch_amr=false`
 - `disable_auto_login=true`
@@ -182,7 +206,7 @@ npx vercel --prod
 GET /healthz
 ```
 
-應回傳 `version: 4.0.2-vercel`。
+應回傳 `version: 4.0.3-vercel`。
 
 ## 權限摘要
 

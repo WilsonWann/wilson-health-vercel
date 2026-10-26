@@ -15,6 +15,10 @@
       "destination": "/logs.html"
     },
     {
+      "source": "/healthz",
+      "destination": "/api/index?__route=healthz"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api/index?__route=:path*"
     }

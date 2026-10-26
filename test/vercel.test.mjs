@@ -33,6 +33,14 @@ test('LINE Messaging and LINE Login environment variables are exposed to the app
 
 test('route adapter keeps from/to parameters without exposing a second ingest path',()=>assert.equal(normalizeRoute('/api/index?__route=state&from=2026-10-18&to=2026-10-24'),'/api/state?from=2026-10-18&to=2026-10-24'));
 test('route adapter also accepts the original route',()=>assert.equal(normalizeRoute('/api/ingest'),'/api/ingest'));
+test('public version check is routed through the Vercel function',async t=>{
+ const v=JSON.parse(readFileSync(new URL('../vercel.json',import.meta.url),'utf8'));
+ assert.ok(v.rewrites.some(r=>r.source==='/healthz'&&r.destination==='/api/index?__route=healthz'));
+ const app=await createApp(config);t.after(()=>app.close());
+ for(const route of ['/healthz',normalizeRoute('/api/index?__route=healthz')]){
+  const r=await invoke(app,route);assert.equal(r.status,200);assert.equal(r.body.ok,true);assert.equal(r.body.version,'4.0.3-vercel');
+ }
+});
 test('invalid rewritten route rejected',()=>assert.throws(()=>normalizeRoute('/api/index?__route=../.env')));
 test('Vercel never falls back to local or tmp storage',async()=>await assert.rejects(()=>openStore({...config,vercel:true}),/Vercel 必須設定/));
 test('insecure remote database transport rejected before loading driver',async()=>await assert.rejects(()=>openStore({...config,dbUrl:'http://database.example',dbToken:'fixture'}),/HTTPS/));

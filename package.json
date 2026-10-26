@@ -1,6 +1,6 @@
 {
   "name": "wilson-health-v4",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "private": true,
   "type": "module",
   "description": "Multi-user LINE QR health dashboard on Vercel with Turso-backed identity isolation",

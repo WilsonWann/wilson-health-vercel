@@ -8,7 +8,7 @@ function setup(t,request,onComplete=async()=>{}){
   const flow=createLineAuthFlow({request,onChange:v=>views.push(v),onComplete,storage,openWindow:()=>null});t.after(()=>flow.cancel());
   return {flow,views,data,storage,get view(){return views.at(-1);}};
 }
-function started(){return {state:'s',pollToken:'p',authorizeUrl:'https://access.line.me/oauth2/v2.1/authorize?state=s',serverTime:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()};}
+function started(){return {state:'s',pollToken:'p',authorizeUrl:'https://access.line.me/oauth2/v2.1/authorize?state=s&prompt=login',serverTime:new Date().toISOString(),expiresAt:new Date(Date.now()+300000).toISOString()};}
 test('transient network failures retry and stop completely after success',async t=>{
   let polls=0,completed=0;const f=setup(t,async path=>path.endsWith('/start')?started():(++polls===1?Promise.reject(new TypeError('offline')):{status:'complete',csrf:'ok'}),async()=>{completed++;});
   await f.flow.start();await flush();assert.equal(f.view.stage,'reconnecting');
@@ -36,4 +36,9 @@ test('dashboard loading errors can retry without another authorization',async t=
   let starts=0,loads=0;const f=setup(t,async path=>path.endsWith('/start')?(starts++,started()):{status:'complete',csrf:'ok'},async()=>{if(++loads===1)throw new Error('DB temporarily unavailable');});
   await f.flow.start();await flush();assert.equal(f.view.stage,'load-error');
   await f.flow.retryComplete();assert.equal(f.view.stage,'complete');assert.equal(starts,1);assert.equal(loads,2);
+});
+test('a saved URL from before fresh authentication was required is not resumed',async t=>{
+  let requests=0;const f=setup(t,async()=>{requests++;return {status:'pending'};});
+  f.data.set('wilson-line-login',JSON.stringify({state:'old',pollToken:'old',authorizeUrl:'https://access.line.me/oauth2/v2.1/authorize?state=old',deadline:Date.now()+60000}));
+  assert.equal(f.flow.resume(),true);await flush();assert.equal(requests,0);assert.equal(f.view.stage,'expired');assert.match(f.view.message,/設定已更新/);assert.equal(f.data.size,0);
 });

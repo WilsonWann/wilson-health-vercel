@@ -52,6 +52,7 @@ export function createLineAuthFlow({kind='login',request,onChange,onComplete,sto
       if(current!==generation)return;
       const url=new URL(result.authorizeUrl),expires=Date.parse(result.expiresAt),serverTime=Date.parse(result.serverTime);
       if(url.origin!=='https://access.line.me'||!Number.isFinite(expires))throw new Error('LINE 登入連結無效，請重新開始。');
+      if(url.searchParams.get('prompt')!=='login')throw new Error('LINE 登入服務尚未更新，請重新整理網頁；持續發生時請聯絡管理者。');
       const remaining=Number.isFinite(serverTime)?expires-serverTime:expires-now();
       if(remaining<=0)throw new Error('登入連結已逾時，請重新開始。');
       attempt={state:result.state,pollToken:result.pollToken,authorizeUrl:url.href,deadline:now()+remaining};stored(attempt);
@@ -69,7 +70,11 @@ export function createLineAuthFlow({kind='login',request,onChange,onComplete,sto
     let saved;try{saved=JSON.parse(storage?.getItem(key)||'null');}catch{}
     if(!saved)return false;
     if(typeof saved.state!=='string'||typeof saved.pollToken!=='string'||!Number.isFinite(saved.deadline)||saved.deadline<=now()){stored(null);emit('expired','上次登入已逾時，請重新產生 QR Code。');return true;}
-    try{if(new URL(saved.authorizeUrl).origin!=='https://access.line.me')throw new Error();}catch{stored(null);return false;}
+    try{
+      const url=new URL(saved.authorizeUrl);
+      if(url.origin!=='https://access.line.me')throw new Error();
+      if(url.searchParams.get('prompt')!=='login'){stored(null);emit('expired','登入設定已更新。請重新產生 QR Code，再用手機掃描。');return true;}
+    }catch{stored(null);return false;}
     attempt=saved;emit('waiting','已接續上次登入。請完成手機確認；需要掃碼時可重新開啟 LINE 視窗。');countdown();check();return true;
   }
   return {start,reopen,resume,wake:()=>check(),matches:(source,state)=>source===popup&&state===attempt?.state,cancel(){stop({close:true});attempt=null;completed=null;emit('idle','');},retryComplete(){if(completed)return finish(completed);}};

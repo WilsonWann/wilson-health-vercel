@@ -1,3 +1,38 @@
+# Wilson 健康日報 4.0.3 — 驗證紀錄
+
+## 原因查核
+
+- 公開站台頁面標題為 4.0.2。
+- 以原本 4.0.2 程式模擬已記住帳號的 LINE SSO：授權 URL 的 prompt 為空，驗證結果 amr=linesso 時 callback 回 400，狀態為 failed，後端原因「請使用 LINE QR Code 完成登入」，本站 sessions_v4 筆數為 0。
+- LINE 官方文件明確記載 disable_auto_login 並不禁用 SSO；prompt=login 才是要求既有 SSO session 重新驗證的參數。此條件能重現使用者的畫面，未取得使用者該次正式環境的完整伺服器記錄。
+
+## 自動測試與瀏覽器驗證
+
+- `npm test`：127 tests passed，0 failed。
+- `npm run check`：passed。
+- 驗證授權 URL 同時要求 prompt=login、initial_amr_display=lineqr、switch_amr=false、disable_auto_login=true。
+- SSO、缺少 amr 與密碼登入結果仍會被 QR 限制拒絕，並提供可操作錯誤；不因此建立本站 session。
+- 驗證授權碼、nonce、資料庫錯誤分類，錯誤內容不外洩原始憑證；操作紀錄失敗不再使已驗證登入失敗。
+- 原狀態輪詢、session 隔離、回應遺失復原及日報相關回歸測試通過。
+- 驗證 /healthz 的 Vercel rewrite 與 /api/healthz 公開版本回應。
+
+Chromium + mock LINE 完整流程：
+
+- 正常登入、短暫斷線、成功回應遺失、彈出視窗被擋、重新整理接續、資料載入重試、手機尺寸取消／Guest、過期重試及 Admin 綁定。
+- 模擬 LINE 仍保留帳號 Cookie，意外回傳 linesso 時：callback 顯示 LINE_QR_REQUIRED，提示重新掃碼；主視窗顯示相同原因，且沒有本站登入 session。
+- callback 返回按鈕切回原登入視窗；重新產生 QR 後可以完成登入。
+- 登出後本站 session 消失，即使 LINE Cookie 仍在，下次授權 URL 也要求 prompt=login。
+- 重新部署時遇到舊的有效授權 URL，前端會丟棄舊流程並提示重新產生。
+- 瀏覽器測試停用 AbortSignal.any，保留 4.0.2 的瀏覽器相容性驗證。
+
+## 實際環境限制
+
+本次沒有使用真實 LINE 帳號進行新的 QR 掃描，也未部署 Vercel Production。正式環境該次錯誤未直接取得，故不把模擬結果視為正式環境唯一可能原因。新版錯誤代碼與參考編號可用來確認後續錯誤是否發生在相同階段。
+
+以下保留歷史版本驗證紀錄：
+
+---
+
 # Wilson 健康日報 4.0.2 — 驗證紀錄
 
 ## 本次驗證

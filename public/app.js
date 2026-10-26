@@ -1,4 +1,4 @@
-import { createLineAuthFlow } from './line-auth.js?v=4.0.2';
+import { createLineAuthFlow } from './line-auth.js?v=4.0.3';
 const $=s=>document.querySelector(s);
 let csrf='',state=null,preview='',selectedMetric='step_count',role='admin';
 const metadata={step_count:['步數','步',0],sleep_analysis:['睡眠','小時',2],heart_rate:['平均心率','bpm',1],resting_heart_rate:['靜止心率','bpm',0],active_energy:['活動熱量','kcal',1],apple_exercise_time:['運動時間','分鐘',0],height:['身高','cm',1],'weight_&_body_mass':['體重','kg',1],body_mass_index:['BMI','',1]};

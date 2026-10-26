@@ -4,12 +4,6 @@ const metadata={step_count:['步數','步',0],sleep_analysis:['睡眠','小時',
 const bodyMetrics=new Set(['height','weight_&_body_mass','body_mass_index']);
 const loginForm=$('#loginForm'),usernameInput=$('#username'),passwordInput=$('#password');
 loginForm.noValidate=true;usernameInput.required=false;passwordInput.required=false;
-const lineResult=new URLSearchParams(location.search).get('line');
-const lineMessages={
-  'login-ok':'LINE Login 成功。','unbound':'此 LINE 帳號尚未綁定，請先用管理者帳密登入後到 LINE 連線區綁定。',
-  'expired':'LINE 授權已逾時，請重新登入。','cancelled':'LINE 授權已取消。','login-failed':'LINE Login 失敗，請重新嘗試。',
-  'bound':'LINE 帳號綁定完成。','bound-no-friend':'LINE 已綁定，但尚未確認已加入官方帳號好友。','bind-failed':'LINE 綁定失敗，請重新嘗試。'
-};
 function fmtTime(s){if(!s)return '未提供';const d=new Date(s);return new Date(d.getTime()+8*3600000).toISOString().slice(0,19).replace('T',' ')+'（UTC+8）';}
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function notify(text,error=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').classList.toggle('error',error);}
@@ -86,8 +80,7 @@ async function load(resetSettings=false){
   state=await api('/api/state?'+params);role=state.role||role;$('#from').value=state.from;$('#to').value=state.to;
   if(resetSettings)fillSettings(state.settings);else{$('#scheduleBadge').textContent=role==='guest'?'Guest Demo · 唯讀':state.settings.autoSend?`每日 ${state.settings.reportTime} 後排程發送`:'自動發送未啟用';}applyRole();
   const last=$('#reportDate').value,days=[...new Set(state.rows.map(r=>r.date))].sort().reverse();$('#reportDate').replaceChildren(...days.map(d=>{const o=el('option',d);o.value=d;return o;}));if(days.includes(last))$('#reportDate').value=last;
-  await renderDay();selectMetric(selectedMetric);$('#events').replaceChildren(...state.events.map(x=>{const box=el('div',null,'event');box.append(el('time',fmtTime(x.created_at)));const msg=el('div',null,'msg');msg.append(el('strong',x.event),document.createTextNode(x.message));box.append(msg);return box;}));
-  if(!state.events.length)$('#events').append(el('p',role==='guest'?'Guest 模式不提供私人操作紀錄。':'尚無操作紀錄','muted'));
+  await renderDay();selectMetric(selectedMetric);
 }
 async function enter(){ $('#login').hidden=true;$('#workspace').hidden=false;await load(true);applyRole(); }
 loginForm.addEventListener('submit',async e=>{e.preventDefault();const username=usernameInput.value.trim(),password=passwordInput.value;if(!username){$('#loginError').textContent='請輸入帳號';usernameInput.focus();return;}const b=e.submitter||loginForm.querySelector('button[type="submit"]');b.disabled=true;try{const r=await api('/api/login',{username,password});csrf=r.csrf;role=r.role||'admin';passwordInput.value='';$('#loginError').textContent='';await enter();}catch(err){$('#loginError').textContent=err.message;}finally{b.disabled=false;}});
@@ -97,20 +90,39 @@ $('#jsonFile').onchange=async()=>{const f=$('#jsonFile').files[0];if(!f)return;i
 $('#importButton').onclick=()=>busy($('#importButton'),async()=>{let data;try{data=JSON.parse($('#jsonText').value);}catch{throw new Error('JSON 格式有誤，請貼完整內容');}const r=await api('/api/import',data);const message=`已驗證 ${r.received} 筆；更新 ${r.changed} 筆；${r.unchanged} 筆內容相同；略過 ${r.rejected||0} 筆。\n${r.warnings.join('\n')}`;$('#importResult').textContent=message;notify('資料已匯入；沒有發送 LINE。');await load(false);});
 $('#settingsForm').onsubmit=e=>{e.preventDefault();busy(e.submitter,async()=>{const r=await api('/api/settings',{displayName:$('#displayName').value,reportTime:$('#reportTime').value,autoSend:$('#autoSend').checked});fillSettings(r.settings);notify('報告設定已儲存。');await load(false);});};
 
-$('#lineQrLink').onclick=()=>busy($('#lineQrLink'),async()=>{const r=await api('/api/line/bind/start',{});location.assign(r.authorizeUrl);});
+let lineLinkTimer=null,lineLoginTimer=null;
+function renderQr(target,svg){target.replaceChildren();const box=document.createElement('div');box.className='qr-svg';box.innerHTML=svg;target.append(box);}
+async function pollLineBind(stateId,expiresAt){
+  clearInterval(lineLinkTimer);const end=Date.parse(expiresAt||'');
+  async function check(){
+    try{const r=await api('/api/line/bind/status?state='+encodeURIComponent(stateId));
+      if(r.status==='complete'){clearInterval(lineLinkTimer);$('#lineLinkStatus').textContent=`綁定完成${r.displayName?'：'+r.displayName:''}${r.friendFlag===false?'；尚未確認已加入官方帳號好友':''}`;notify('LINE 帳號已綁定。之後可直接用 LINE Login QR 登入。');await load(true);return;}
+      if(r.status==='failed'||r.status==='expired'){clearInterval(lineLinkTimer);$('#lineLinkStatus').textContent=r.error||'LINE 綁定已失效，請重新產生。';return;}
+      $('#lineLinkStatus').textContent='等待手機完成 LINE Login 授權…';
+    }catch(e){clearInterval(lineLinkTimer);$('#lineLinkStatus').textContent=e.message;}
+    if(Number.isFinite(end)&&Date.now()>end){clearInterval(lineLinkTimer);$('#lineLinkStatus').textContent='QR Code 已逾時，請重新產生。';}
+  }
+  await check();lineLinkTimer=setInterval(check,1800);
+}
+$('#lineQrLink').onclick=()=>busy($('#lineQrLink'),async()=>{const r=await api('/api/line/bind/start',{});$('#bindQrPanel').hidden=false;renderQr($('#bindQr'),r.qrSvg);$('#lineLinkStatus').textContent='請用手機 LINE 掃描 QR Code 完成綁定。';await pollLineBind(r.state,r.expiresAt);});
 
-$('#showLineLogin').onclick=()=>busy($('#showLineLogin'),async()=>{const r=await api('/api/line/login/start',{});location.assign(r.authorizeUrl);});
+async function pollLineLogin(stateId,pollToken,expiresAt){
+  clearInterval(lineLoginTimer);const end=Date.parse(expiresAt||'');
+  async function check(){
+    try{const r=await api('/api/line/login/status',{state:stateId,pollToken});
+      if(r.status==='complete'){clearInterval(lineLoginTimer);csrf=r.csrf;role=r.role||'admin';$('#loginQrStatus').textContent=`LINE Login 成功${r.displayName?'：'+r.displayName:''}`;$('#loginError').textContent='';await enter();return;}
+      if(r.status==='failed'||r.status==='expired'){clearInterval(lineLoginTimer);$('#loginQrStatus').textContent=r.error||'LINE Login 已失效，請重新產生 QR Code。';$('#loginQrStatus').classList.add('error');return;}
+      $('#loginQrStatus').textContent='等待手機掃描並完成 LINE Login…';
+    }catch(e){clearInterval(lineLoginTimer);$('#loginQrStatus').textContent=e.message;$('#loginQrStatus').classList.add('error');}
+    if(Number.isFinite(end)&&Date.now()>end){clearInterval(lineLoginTimer);$('#loginQrStatus').textContent='QR Code 已逾時，請重新產生。';}
+  }
+  await check();lineLoginTimer=setInterval(check,1800);
+}
+$('#showLineLogin').onclick=()=>busy($('#showLineLogin'),async()=>{const r=await api('/api/line/login/start',{});$('#loginQrPanel').hidden=false;loginForm.hidden=true;$('.login-divider').hidden=true;renderQr($('#loginQr'),r.qrSvg);$('#loginQrStatus').classList.remove('error');$('#loginQrStatus').textContent='請用手機 LINE 掃描 QR Code。';await pollLineLogin(r.state,r.pollToken,r.expiresAt);});
+$('#cancelLineLogin').onclick=()=>{clearInterval(lineLoginTimer);$('#loginQrPanel').hidden=true;loginForm.hidden=false;$('.login-divider').hidden=false;$('#showLineLogin').disabled=false;};
 
 $('#verifyLine').onclick=()=>busy($('#verifyLine'),async()=>{const r=await api('/api/line/verify',{});notify(`${r.name}：${r.message}`);await load(true);});
 $('#testLine').onclick=()=>{if(!confirm('發送一則不含健康資料的 LINE 測試訊息？這會使用一則推播額度。'))return;busy($('#testLine'),async()=>{await api('/api/line/test',{confirm:true});notify('測試訊息已由 LINE API 受理，請確認手機是否收到。');await load(false);});};
 $('#sendReport').onclick=()=>{if(!confirm(`將 ${$('#reportDate').value} 的健康日報傳給已設定的個人 LINE 收件人？`))return;busy($('#sendReport'),async()=>{const r=await api('/api/report/send',{date:$('#reportDate').value,confirm:true});notify(r.status==='accepted'?'日報已由 LINE API 受理。':r.reason==='already_sent'?'這一天已發送，不會重複傳送。':'發送正在處理，沒有重複提交。');await load(false);});};
 $('#copyReport').onclick=()=>busy($('#copyReport'),async()=>{await navigator.clipboard.writeText(preview);notify('已複製日報文字。');});
-try{
-  const s=await api('/api/session');
-  if(s.authenticated){csrf=s.csrf;role=s.role||'admin';await enter();}
-  if(lineResult&&lineMessages[lineResult]){
-    const isError=['unbound','expired','cancelled','login-failed','bind-failed'].includes(lineResult);
-    if(s.authenticated)notify(lineMessages[lineResult],isError);else $('#loginError').textContent=lineMessages[lineResult];
-    history.replaceState(null,'',location.pathname+location.hash);
-  }
-}catch(e){$('#loginError').textContent=e.message;}
+try{const s=await api('/api/session');if(s.authenticated){csrf=s.csrf;role=s.role||'admin';await enter();}}catch(e){$('#loginError').textContent=e.message;}

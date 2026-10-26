@@ -11,6 +11,10 @@
   },
   "rewrites": [
     {
+      "source": "/logs",
+      "destination": "/logs.html"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api/index?__route=:path*"
     }

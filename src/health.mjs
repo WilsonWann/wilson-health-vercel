@@ -187,11 +187,12 @@ export function rawTotal(values) {
   if (!Number.isFinite(sum) || sum > Number.MAX_SAFE_INTEGER) throw new InputError('合計超過安全數值範圍');
   return sum;
 }
-export function report(day, rows, displayName='Wilson') {
+export function report(day, rows, displayName='') {
   if (!isDate(day)) throw new InputError('日期格式錯誤');
   const data = rows.filter(r=>r.date===day); if (!data.length) throw new InputError('該日期尚未匯入資料',404);
   const values = Object.fromEntries(data.map(r=>[r.metric,r.value]));
   const latest = data.map(r=>r.updated_at).sort().at(-1);
   const sources = [...new Set(data.map(r=>r.source).filter(Boolean))];
-  return [`⌚ ${displayName}的每日健康紀錄`, `資料日期：${day}（台北）`, ...Object.keys(METRICS).map(k=>{const r=data.find(x=>x.metric===k);const carried=r?.carried_from?`（最近量測 ${r.carried_from}）`:'';return `${METRICS[k].label}：${metricText(k,values[k])}${carried}`;}), `來源：${sources.join('、') || '未提供（不影響數值）'}`, `更新：${formatTime(latest)}`, '依已同步資料整理；身體測量可沿用截至該日最近一次量測。未提供不代表 0。'].join('\n');
+  const title=String(displayName||'').trim()?`⌚ ${String(displayName).trim()}的每日健康紀錄`:'⌚ 每日健康紀錄';
+  return [title, `資料日期：${day}（台北）`, ...Object.keys(METRICS).map(k=>{const r=data.find(x=>x.metric===k);const carried=r?.carried_from?`（最近量測 ${r.carried_from}）`:'';return `${METRICS[k].label}：${metricText(k,values[k])}${carried}`;}), `來源：${sources.join('、') || '未提供（不影響數值）'}`, `更新：${formatTime(latest)}`, '依已同步資料整理；身體測量可沿用截至該日最近一次量測。未提供不代表 0。'].join('\n');
 }

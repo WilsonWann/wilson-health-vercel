@@ -45,6 +45,7 @@ test('guest account is read-only and can only see mock health data',async t=>{
 
   const blocked=[
     ['/api/backup',{cookie:guestCookie}],
+    ['/api/events?page=1',{cookie:guestCookie}],
     ['/api/import',{method:'POST',body:realPayload,cookie:guestCookie,csrf:guestCsrf}],
     ['/api/settings',{method:'POST',body:{displayName:'x'},cookie:guestCookie,csrf:guestCsrf}],
     ['/api/line/verify',{method:'POST',body:{},cookie:guestCookie,csrf:guestCsrf}],

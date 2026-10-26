@@ -2,8 +2,9 @@ import { randomBytes, randomUUID, createCipheriv, createDecipheriv } from 'node:
 import { InputError } from './health.mjs';
 const schema=[
   `CREATE TABLE IF NOT EXISTS samples(date TEXT NOT NULL,metric TEXT NOT NULL,value REAL NOT NULL,source TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(date,metric)) STRICT`,
-  `CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),display_name TEXT NOT NULL DEFAULT 'Wilson',auto_send INTEGER NOT NULL DEFAULT 0,report_time TEXT NOT NULL DEFAULT '09:00',line_verified INTEGER NOT NULL DEFAULT 0,credentials TEXT) STRICT`,
+  `CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),display_name TEXT NOT NULL DEFAULT '',auto_send INTEGER NOT NULL DEFAULT 0,report_time TEXT NOT NULL DEFAULT '09:00',line_verified INTEGER NOT NULL DEFAULT 0,credentials TEXT) STRICT`,
   `INSERT OR IGNORE INTO settings(id) VALUES(1)`,
+  `UPDATE settings SET display_name='' WHERE id=1 AND display_name='Wilson'`,
   `CREATE TABLE IF NOT EXISTS sessions_v2(hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL,role TEXT NOT NULL) STRICT`,
   `CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,retry_key TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,attempt_at TEXT NOT NULL,error TEXT) STRICT`,
   `CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,event TEXT NOT NULL,message TEXT NOT NULL,created_at TEXT NOT NULL) STRICT`,
@@ -106,6 +107,13 @@ export class Store {
     const rows=await this.metricSamples(metrics,to),latest=new Map();
     for(const row of rows)latest.set(row.metric,row);
     return [...latest.values()];
+  }
+  async eventsPage(page=1,pageSize=10){
+    const safePage=Math.max(1,Number(page)||1),safeSize=Math.min(50,Math.max(1,Number(pageSize)||10));
+    const count=await this.db.prepare('SELECT COUNT(*) AS total FROM events').get();
+    const total=Number(count?.total||0),totalPages=Math.max(1,Math.ceil(total/safeSize)),current=Math.min(safePage,totalPages),offset=(current-1)*safeSize;
+    const items=await this.db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ? OFFSET ?').all(safeSize,offset);
+    return {items,page:current,pageSize:safeSize,total,totalPages};
   }
   async events(){return this.db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 40').all();}
   async consumeLoginAttempt(key,now){

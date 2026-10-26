@@ -39,3 +39,12 @@ test('round after adding raw totals',()=>{assert.equal(Math.round(rawTotal([1.4,
 test('timezone output is +8 without milliseconds',()=>assert.equal(formatTime('2026-10-24T03:14:06.423Z'),'2026-10-24 11:14:06（UTC+8）'));
 test('timezone rollover',()=>{assert.equal(taipeiDate('2026-10-24T20:00:00Z'),'2026-10-25');assert.equal(shiftDate('2026-03-01',-1),'2026-02-28');});
 test('report preserves missing fields and formatted decimals',()=>{const rows=[{date:'2026-10-24',metric:'step_count',value:1234.75,source:null,updated_at:'2026-10-24T03:14:06.423Z'}];const s=report('2026-10-24',rows);assert.match(s,/1,235 步/);assert.match(s,/睡眠：未提供/);assert.match(s,/11:14:06（UTC\+8）/);assert.doesNotMatch(s,/\.423Z/);});
+
+
+test('blank report name uses generic daily health title',()=>{
+  const rows=[{date:'2026-10-24',metric:'step_count',value:6115.8,source:null,updated_at:'2026-10-24T03:14:06.423Z'}];
+  const text=report('2026-10-24',rows,'');
+  assert.match(text,/^⌚ 每日健康紀錄/m);
+  assert.ok(!text.includes('Wilson'));
+  assert.ok(!text.includes('⌚ 的每日健康紀錄'));
+});

@@ -3,7 +3,7 @@
 日期：2026-10-25；執行環境：Node.js 22.16.0（部署設定為 24.x）。
 
 已實際執行：
-- npm test：101 tests，101 pass，0 fail。
+- npm test：100 tests，100 pass，0 fail。
 - npm run build / check：JavaScript 語法檢查通過。
 - 原有 56 項本地測試保留並改為非同步 Store 介面。
 - 新增 Vercel 路由、已解析的 body、4 MB 程式內限制、遠端資料庫必填、Cron GET 驗證與停用保護、固定排程欄位。
@@ -29,10 +29,10 @@
 
 - 2.6.3: verified passwordless guest submit is not blocked by native HTML required validation.
 
-- 3.0.2：LINE Login 維持 LINE 官方 QR Login，並將登入 session cookie 改為 SameSite=Lax，確保 LINE 跨站 callback 後的 redirect 能立即帶入登入狀態。回歸測試驗證 QR 優先參數、callback token exchange、ID token verify、friendship status、收件人綁定與 callback 直接建立網站 session。
+- 2.7.0：新增 LINE Login QR 收件人綁定回歸測試；驗證 token-only LINE 設定、短效 state/nonce、authorization URL、callback token exchange、ID token verify、friendship status 與收件人 User ID 自動寫回。
 - QR/LINE Login 測試使用 fetch mock，沒有連真實 LINE 平台；正式部署仍需設定真實 LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET 與 Callback URL。
 
-## 3.0.2 LINE Login QR
+## 3.1.0 LINE Login QR
 
 - 帳號密碼登入回歸保持通過。
 - LINE Login QR start 產生 server-side SVG QR 與短效 state/nonce/poll secret。
@@ -40,3 +40,12 @@
 - admin 帳密登入後可用 QR 綁定 LINE userId；之後相同 LINE userId 可完成 QR 登入並取得 admin Session。
 - Messaging API token 由 LINE_CHANNEL_ACCESS_TOKEN 後端變數讀取；前端 HTML/JS 不包含 token 輸入欄位。
 - QR encoder vendored in-repo；不向第三方 QR 服務傳送 OAuth URL。
+
+- `npm test`: 102 tests passed, 0 failed.
+- LINE bind now requires friendship confirmation, Messaging API profile visibility, and a successful binding test push.
+
+## 3.1.0 操作紀錄頁
+
+- 操作紀錄移至 `/logs`，主 Dashboard 不再夾帶 events。
+- 每頁固定 10 筆，支援上一頁／下一頁。
+- `/api/events` 僅允許 admin session。

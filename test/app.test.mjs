@@ -12,7 +12,7 @@ test('HTTP, persistence, authentication and LINE integration with mocked LINE',a
  t.after(()=>app.close());let cookie='',csrf='';
  async function req(path,data,extra={}){const r=await fetch(base+path,{method:data===undefined?'GET':'POST',headers:{...(cookie?{Cookie:cookie}:{}),...(data===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf,Origin:base}),...extra},body:data===undefined?undefined:JSON.stringify(data)});let body;try{body=await r.json();}catch{body={};}return {r,body};}
  await t.test('private data is inaccessible without login',async()=>assert.equal((await req('/api/state')).r.status,401));
- await t.test('login returns HttpOnly cookie and CSRF',async()=>{const x=await req('/api/login',{username:'admin',password:'test-only-password-12345'});assert.equal(x.r.status,200);cookie=x.r.headers.get('set-cookie').split(';')[0];csrf=x.body.csrf;assert.match(x.r.headers.get('set-cookie'),/HttpOnly/);assert.match(x.r.headers.get('set-cookie'),/SameSite=Lax/);});
+ await t.test('login returns HttpOnly cookie and CSRF',async()=>{const x=await req('/api/login',{username:'admin',password:'test-only-password-12345'});assert.equal(x.r.status,200);cookie=x.r.headers.get('set-cookie').split(';')[0];csrf=x.body.csrf;assert.match(x.r.headers.get('set-cookie'),/HttpOnly/);assert.match(x.r.headers.get('set-cookie'),/SameSite=Strict/);});
  await t.test('writes without CSRF denied',async()=>assert.equal((await req('/api/import',metric(),{'X-CSRF-Token':''})).r.status,403));
  await t.test('cross-origin writes denied',async()=>assert.equal((await req('/api/import',metric(),{Origin:'https://attacker.example'})).r.status,403));
  await t.test('phone import without bearer denied',async()=>assert.equal((await req('/api/ingest',metric())).r.status,401));
@@ -34,6 +34,12 @@ test('HTTP, persistence, authentication and LINE integration with mocked LINE',a
    const preview=await req('/api/report/preview?date=2026-10-24');assert.match(preview.body.text,/身高：175.2 cm（最近量測 2026-10-20）/);assert.match(preview.body.text,/體重：88.2 kg（最近量測 2026-10-20）/);assert.match(preview.body.text,/BMI：28.7（最近量測 2026-10-20）/);
  });
  await t.test('dashboard default range includes today',async()=>{const x=await req('/api/state');assert.equal(x.body.to,'2026-10-25');});
+ await t.test('operation logs are paginated 10 per page on a dedicated API',async()=>{
+   for(let i=0;i<14;i++)await app.store.event('fixture_'+i,'fixture message '+i,new Date(now.getTime()+i*1000).toISOString());
+   const first=await req('/api/events?page=1');assert.equal(first.r.status,200);assert.equal(first.body.pageSize,10);assert.equal(first.body.items.length,10);assert.ok(first.body.total>=14);assert.ok(first.body.totalPages>=2);
+   const second=await req('/api/events?page=2');assert.equal(second.r.status,200);assert.ok(second.body.items.length>=1);assert.notEqual(first.body.items[0].id,second.body.items[0].id);
+   const state=await req('/api/state');assert.equal(Object.hasOwn(state.body,'events'),false);
+ });
  await t.test('preview is UTC+8 to seconds and does not send',async()=>{const x=await req('/api/report/preview?date=2026-10-24');assert.match(x.body.text,/2026-10-25 11:00:00（UTC\+8）/);assert.equal(calls.length,0);});
  await t.test('LINE credentials save immediately and are encrypted',async()=>{const x=await req('/api/settings',{lineToken:'test-only-line-token-12345',userId:'U'+'a'.repeat(32),displayName:'Wilson'});assert.equal(x.r.status,200);assert.equal(x.body.settings.lineConfigured,true);assert.equal(x.body.settings.lineVerified,false);assert.ok(!(await app.store.settings()).credentials.includes('test-only-line-token'));});
  await t.test('state never returns access token or encryption key',async()=>{const x=await req('/api/state');assert.ok(!JSON.stringify(x.body).includes('test-only-line-token'));assert.ok(!JSON.stringify(x.body).includes('a'.repeat(64)));});

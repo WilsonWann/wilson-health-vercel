@@ -17,7 +17,8 @@ const schema=[
   `CREATE TABLE IF NOT EXISTS user_samples_v4(user_id TEXT NOT NULL,date TEXT NOT NULL,metric TEXT NOT NULL,value REAL NOT NULL,source TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,date,metric)) STRICT`,
   `CREATE TABLE IF NOT EXISTS user_report_settings_v4(user_id TEXT PRIMARY KEY,daily_enabled INTEGER NOT NULL DEFAULT 0,weekly_enabled INTEGER NOT NULL DEFAULT 0,daily_time TEXT NOT NULL DEFAULT '09:00',weekly_day INTEGER NOT NULL DEFAULT 1) STRICT`,
   `CREATE TABLE IF NOT EXISTS sessions_v4(hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL,role TEXT NOT NULL,user_id TEXT,username TEXT) STRICT`,
-  `CREATE TABLE IF NOT EXISTS line_auth_challenges_v4(state TEXT PRIMARY KEY,nonce TEXT NOT NULL,purpose TEXT NOT NULL,poll_hash TEXT NOT NULL,status TEXT NOT NULL,expires INTEGER NOT NULL,created_at TEXT NOT NULL,line_user_id TEXT,internal_user_id TEXT,display_name TEXT,friend_flag INTEGER,role TEXT,error TEXT) STRICT`
+  `CREATE TABLE IF NOT EXISTS line_auth_challenges_v4(state TEXT PRIMARY KEY,nonce TEXT NOT NULL,purpose TEXT NOT NULL,poll_hash TEXT NOT NULL,status TEXT NOT NULL,expires INTEGER NOT NULL,created_at TEXT NOT NULL,line_user_id TEXT,internal_user_id TEXT,display_name TEXT,friend_flag INTEGER,role TEXT,error TEXT) STRICT`,
+  `CREATE TABLE IF NOT EXISTS line_login_results_v1(state TEXT PRIMARY KEY,session_cipher TEXT NOT NULL,expires INTEGER NOT NULL) STRICT`
 ];
 export async function openStore(config,{client}={}) {
   if(!client) {
@@ -148,6 +149,29 @@ export class Store {
     await this.db.prepare(`INSERT INTO line_auth_challenges_v4(state,nonce,purpose,poll_hash,status,expires,created_at) VALUES(?,?,?,?,'pending',?,?)`).run(state,nonce,purpose,pollHash,expires,createdAt);
   }
   async lineUserChallenge(state){return this.db.prepare('SELECT * FROM line_auth_challenges_v4 WHERE state=?').get(state);}
+  async redeemLineUserChallenge(state,issued,now){
+    // Concurrent polls and a lost response must redeem the same session. The
+    // encrypted delivery receipt is available only with the original poll token,
+    // for at most 60 seconds, and never recreates a logged-out session.
+    const cipher=this.encrypt(issued),tokenHash=createHash('sha256').update(issued.token).digest('hex');
+    const results=await this.client.batch([
+      {sql:'DELETE FROM line_login_results_v1 WHERE expires<=?',args:[now]},
+      {sql:'DELETE FROM sessions_v4 WHERE expires<=?',args:[now]},
+      {sql:`INSERT OR IGNORE INTO line_login_results_v1(state,session_cipher,expires)
+        SELECT state,?,MIN(expires,?) FROM line_auth_challenges_v4
+        WHERE state=? AND status='complete' AND expires>?`,args:[cipher,now+60000,state,now]},
+      {sql:`INSERT OR IGNORE INTO sessions_v4(hash,csrf,expires,role,user_id,username)
+        SELECT ?,?,?,'user',?,? FROM line_login_results_v1 WHERE state=? AND session_cipher=?`,
+        args:[tokenHash,issued.csrf,issued.expires,issued.userId,issued.username,state,cipher]},
+      {sql:`UPDATE line_auth_challenges_v4 SET status='consumed' WHERE state=? AND status='complete'
+        AND EXISTS(SELECT 1 FROM line_login_results_v1 WHERE state=? AND expires>?)`,args:[state,state,now]},
+      {sql:'SELECT session_cipher FROM line_login_results_v1 WHERE state=? AND expires>?',args:[state,now]}
+    ],'write');
+    const receipt=results.at(-1).rows[0];if(!receipt)return null;
+    const saved=this.decrypt(receipt.session_cipher),savedHash=createHash('sha256').update(saved.token).digest('hex');
+    const active=await this.db.prepare('SELECT hash FROM sessions_v4 WHERE hash=? AND user_id=? AND expires>?').get(savedHash,saved.userId,now);
+    return active?saved:null;
+  }
   async completeLineUserChallenge(state,{lineUserId,internalUserId,displayName,friendFlag,role='user'}){
     await this.db.prepare(`UPDATE line_auth_challenges_v4 SET status='complete',line_user_id=?,internal_user_id=?,display_name=?,friend_flag=?,role=?,error=NULL WHERE state=?`).run(lineUserId,internalUserId,displayName||'',friendFlag?1:0,role,state);
   }

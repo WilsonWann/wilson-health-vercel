@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
 const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
+const flow=readFileSync(new URL('../public/line-auth.js',import.meta.url),'utf8');
 const css=readFileSync(new URL('../public/style.css',import.meta.url),'utf8');
 
 test('metric cards are interactive and accessible',()=>{
@@ -46,8 +47,8 @@ test('LINE Login uses the official QR Login window and keeps admin binding separ
   assert.match(html,/id="showLineLogin"/);assert.match(html,/id="loginQrPanel"/);assert.match(html,/LINE 官方 QR Login/);
   assert.match(html,/id="openLineLoginLink"/);assert.match(html,/id="lineQrLink"/);assert.match(html,/id="openLineBindLink"/);assert.match(html,/LINE_CHANNEL_ACCESS_TOKEN/);
   assert.doesNotMatch(html,/id="userId"/);assert.doesNotMatch(html,/id="token"/);
-  assert.match(app,/\/api\/line\/login\/start/);assert.match(app,/\/api\/line\/login\/status/);assert.match(app,/window\.open\('',\s*'lineLogin'/);
-  assert.match(app,/\/api\/line\/bind\/start/);assert.match(app,/window\.open\('',\s*'lineBind'/);assert.match(html,/data-user-only/);assert.match(app,/\/api\/me\/sync-config/);
+  assert.match(flow,/\/api\/line\/login\/start/);assert.match(flow,/\/api\/line\/login\/status/);
+  assert.match(flow,/\/api\/line\/bind\/start/);assert.match(app,/createLineAuthFlow/);assert.match(html,/data-user-only/);assert.match(app,/\/api\/me\/sync-config/);
 });
 
 

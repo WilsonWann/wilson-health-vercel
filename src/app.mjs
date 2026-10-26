@@ -9,7 +9,7 @@ const eq=(a,b)=>typeof a==='string'&&typeof b==='string'&&timingSafeEqual(Buffer
 const SESSION_TTL=8*3600*1000;
 const LINE_LINK_TTL=5*60*1000;
 const textFile=p=>readFileSync(fileURLToPath(new URL('../public/'+p,import.meta.url)));
-const STATIC={'/':['index.html','text/html; charset=utf-8'],'/logs':['logs.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/logs.js':['logs.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
+const STATIC={'/':['index.html','text/html; charset=utf-8'],'/logs':['logs.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/line-auth.js':['line-auth.js','text/javascript; charset=utf-8'],'/line-callback.js':['line-callback.js','text/javascript; charset=utf-8'],'/logs.js':['logs.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
 
 const USERNAME_RE=/^[A-Za-z0-9._-]{3,50}$/;
 function mockRows(from,to,updatedAt){
@@ -122,13 +122,19 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     else await store.createLineAuthChallenge({state,nonce,purpose,sessionHash,pollHash:hash(pollToken),expires,createdAt:now.toISOString()});
     const q=new URLSearchParams({response_type:'code',client_id:String(config.lineLoginChannelId),redirect_uri:redirect,state,scope:'openid profile',nonce,bot_prompt:'aggressive',disable_auto_login:'true',initial_amr_display:'lineqr',switch_amr:'false'});
     const authorizeUrl='https://access.line.me/oauth2/v2.1/authorize?'+q.toString();
-    return {state,pollToken,authorizeUrl,expiresAt:new Date(expires).toISOString()};
+    return {state,pollToken,authorizeUrl,expiresAt:new Date(expires).toISOString(),serverTime:now.toISOString()};
   }
   async function finishLineAuth(req,url,res){
     const state=url.searchParams.get('state')||'',code=url.searchParams.get('code')||'',oauthError=url.searchParams.get('error');
     const userChallenge=await store.lineUserChallenge(state),legacyChallenge=userChallenge?null:await store.lineAuthChallenge(state),challenge=userChallenge||legacyChallenge,isBind=legacyChallenge?.purpose==='bind';
-    const page=(ok,title,message)=>{res.writeHead(ok?200:400,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f5f8f7;color:#172d35;padding:36px;line-height:1.7"><main style="max-width:520px;margin:auto;background:white;border:1px solid #dde7e5;border-radius:16px;padding:28px"><h1 style="font-size:26px">${title}</h1><p>${message}</p><p style="color:#677d82">可以關閉此頁，回到健康日報。</p></main></body>`);};
-    if(!challenge||challenge.status!=='pending'||challenge.expires<=clock().getTime())return page(false,'LINE 授權已失效','請回到健康日報重新產生 QR Code。');
+    const page=(ok,title,message)=>{const safeState=/^[a-f0-9]{48}$/.test(state)?state:'';res.writeHead(ok?200:400,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><link rel="stylesheet" href="/style.css?v=4.0.2"><script type="module" src="/line-callback.js?v=4.0.2"></script></head><body class="auth-callback" data-auth-state="${safeState}" data-auth-status="${ok?'updated':'failed'}"><section class="login-card"><p class="eyebrow">WILSON · LINE 登入</p><h1>${title}</h1><p>${message}</p><p id="callbackHint">請回到原本的健康日報視窗，系統會接續處理。</p><a class="button-link" href="/">開啟健康日報</a></section></body></html>`);};
+    if(!challenge||challenge.expires<=clock().getTime())return page(false,'LINE 授權已失效','請回到健康日報按「重新產生 QR Code」。');
+    if(['complete','consumed'].includes(challenge.status))return page(true,'LINE 授權已完成','不需要再次掃描，請回到原本的健康日報視窗。');
+    if(challenge.status==='processing')return page(true,'LINE 授權處理中','已收到授權，正在確認身分，請稍候。');
+    if(challenge.status!=='pending')return page(false,'LINE 授權未完成','請回到健康日報重新開始登入。');
+    const table=userChallenge?'line_auth_challenges_v4':'line_auth_challenges_v3';
+    const claimed=await store.db.prepare(`UPDATE ${table} SET status='processing' WHERE state=? AND status='pending' AND expires>?`).run(state,clock().getTime());
+    if(!claimed.changes)return page(true,'LINE 授權處理中','請回到原本的健康日報視窗，系統會接續處理。');
     const fail=async message=>{if(userChallenge)await store.failLineUserChallenge(state,message);else await store.failLineAuthChallenge(state,message);};
     if(oauthError||!code){await fail('使用者取消或 LINE 未回傳授權碼');return page(false,'LINE 授權未完成','授權已取消，請回到健康日報重試。');}
     try{
@@ -219,7 +225,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'4.0.1-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'4.0.2-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -240,13 +246,17 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         checkOrigin(req);const b=await jsonBody(req),row=await store.lineUserChallenge(String(b?.state||''));
         if(!row||row.purpose!=='login')throw new InputError('找不到這次 LINE Login',404);
         const supplied=hash(String(b?.pollToken||''));if(typeof row.poll_hash!=='string'||row.poll_hash.length!==supplied.length||!timingSafeEqual(Buffer.from(row.poll_hash),Buffer.from(supplied)))throw new InputError('LINE Login 驗證失敗',403);
-        if(row.status==='pending'&&row.expires<=clock().getTime())return result(res,200,{status:'expired'});
+        const now=clock().getTime();
+        if(row.expires<=now)return result(res,200,{status:'expired'});
         if(row.status==='failed')return result(res,200,{status:'failed',error:row.error||'LINE Login 失敗'});
-        if(row.status==='complete'){
-          const issued=await issueSession('user',{userId:row.internal_user_id,username:row.display_name||'LINE user'});await store.db.prepare("UPDATE line_auth_challenges_v4 SET status='consumed' WHERE state=?").run(row.state);
-          return result(res,200,{status:'complete',csrf:issued.csrf,role:'user',username:issued.username,displayName:row.display_name||''},{'Set-Cookie':sessionCookie(issued.token)});
+        if(row.status==='complete'||row.status==='consumed'){
+          const issued=await store.redeemLineUserChallenge(row.state,{token:randomBytes(32).toString('hex'),csrf:randomBytes(24).toString('hex'),userId:row.internal_user_id,username:row.display_name||'LINE user',expires:now+SESSION_TTL},now);
+          if(issued)return result(res,200,{status:'complete',csrf:issued.csrf,role:'user',username:issued.username,displayName:row.display_name||''},{'Set-Cookie':sessionCookie(issued.token)});
+          const current=await session(req);
+          if(current?.role==='user'&&current.user_id===row.internal_user_id)return result(res,200,{status:'complete',csrf:current.csrf,role:'user',username:current.username,displayName:row.display_name||''});
+          return result(res,200,{status:'consumed'});
         }
-        if(row.status==='consumed')return result(res,200,{status:'consumed'});return result(res,200,{status:row.status});
+        return result(res,200,{status:row.status});
       }
       if(path==='/api/session'&&method==='GET'){const s=await session(req);return result(res,200,s?{authenticated:true,csrf:s.csrf,role:s.role||'admin',username:s.username||((s.role||'admin')==='guest'?guestUsername:adminUsername),userId:s.user_id||null}:{authenticated:false});}
       if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions_v4 WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
@@ -272,7 +282,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
       if(path.startsWith('/api/')){
         const auth=await requireSession(req,method!=='GET');
         if((path==='/api/line/bind/start'||path==='/api/line/link/start')&&method==='POST'){if((auth.role||'admin')!=='admin')throw new InputError('Guest 為唯讀展示模式，無權綁定 LINE',403);await jsonBody(req);return result(res,200,await startLineAuth(req,{purpose:'bind',sessionHash:auth.hash}));}
-        if((path==='/api/line/bind/status'||path==='/api/line/link/status')&&method==='GET'){if((auth.role||'admin')!=='admin')throw new InputError('Guest 為唯讀展示模式，無權綁定 LINE',403);const st=url.searchParams.get('state')||'',row=await store.lineAuthChallenge(st);if(!row||row.purpose!=='bind'||row.session_hash!==auth.hash)throw new InputError('找不到這次 LINE 綁定',404);if(row.status==='pending'&&row.expires<=clock().getTime())return result(res,200,{status:'expired'});return result(res,200,{status:row.status,userId:maskUserId(row.user_id),displayName:row.display_name||'',friendFlag:row.friend_flag==null?null:!!row.friend_flag,error:row.error||''});}
+        if((path==='/api/line/bind/status'||path==='/api/line/link/status')&&method==='GET'){if((auth.role||'admin')!=='admin')throw new InputError('Guest 為唯讀展示模式，無權綁定 LINE',403);const st=url.searchParams.get('state')||'',row=await store.lineAuthChallenge(st);if(!row||row.purpose!=='bind'||row.session_hash!==auth.hash)throw new InputError('找不到這次 LINE 綁定',404);if(['pending','processing'].includes(row.status)&&row.expires<=clock().getTime())return result(res,200,{status:'expired'});return result(res,200,{status:row.status,userId:maskUserId(row.user_id),displayName:row.display_name||'',friendFlag:row.friend_flag==null?null:!!row.friend_flag,error:row.error||''});}
         if(path==='/api/state'&&method==='GET'){
           const to=url.searchParams.get('to')||taipeiDate(clock()),from=url.searchParams.get('from')||shiftDate(to,-6);
           if(!isDate(from)||!isDate(to)||from>to||Date.parse(to)-Date.parse(from)>365*86400000)throw new InputError('日期範圍需有效，且一次最多查詢 366 天');
@@ -329,7 +339,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
           const b=await jsonBody(req);if(b?.confirm!==true)throw new InputError('需要明確確認測試發送');
           const recent=await store.db.prepare("SELECT created_at FROM deliveries WHERE id LIKE 'test:%' ORDER BY created_at DESC LIMIT 1").get();
           if(recent&&clock().getTime()-Date.parse(recent.created_at)<60000)throw new InputError('測試訊息每分鐘最多一則',429);
-          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 4.0.1\nLINE 連線測試成功。這則訊息不含健康資料。'));
+          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 4.0.2\nLINE 連線測試成功。這則訊息不含健康資料。'));
         }
         if(path==='/api/report/send'&&method==='POST'){
           const b=await jsonBody(req);if(b?.confirm!==true||!isDate(b.date))throw new InputError('需要確認發送及有效日期');

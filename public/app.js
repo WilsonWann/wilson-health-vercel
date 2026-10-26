@@ -8,6 +8,47 @@ function fmtTime(s){if(!s)return '未提供';const d=new Date(s);return new Date
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function notify(text,error=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').classList.toggle('error',error);}
 
+// Resolve navigation only to sections available to the current session role.
+function navigationTarget(hash){
+  let id;
+  try{id=decodeURIComponent(hash.replace(/^#/,'')).toLowerCase();}catch{return null;}
+  if(role==='user'&&id==='import')id='usersync';
+  if(role==='user'&&id==='line')id='userline';
+  for(const link of document.querySelectorAll('aside nav a[href^="#"]')){
+    if(link.closest('[hidden]'))continue;
+    const target=document.getElementById(link.getAttribute('href').slice(1));
+    if(target&&target.id.toLowerCase()===id&&!target.closest('[hidden]'))return target;
+  }
+  return null;
+}
+function navigateToSection(hash,{replace=false,focus=false,smooth=false}={}){
+  if($('#workspace').hidden)return;
+  const target=navigationTarget(hash)||navigationTarget('#overview');
+  if(!target)return;
+  const canonical='#'+target.id;
+  if(location.hash!==canonical)history[replace?'replaceState':'pushState'](null,'',canonical);
+  for(const link of document.querySelectorAll('aside nav a[href^="#"]')){
+    if(!link.closest('[hidden]')&&link.getAttribute('href')===canonical)link.setAttribute('aria-current','location');
+    else link.removeAttribute('aria-current');
+  }
+  const behavior=smooth&&!matchMedia('(prefers-reduced-motion: reduce)').matches?'smooth':'instant';
+  target.scrollIntoView({behavior,block:'start'});
+  if(focus){
+    const heading=target.querySelector('h1,h2')||target;
+    heading.setAttribute('tabindex','-1');
+    heading.focus({preventScroll:true});
+  }
+}
+$('aside nav').addEventListener('click',event=>{
+  const link=event.target.closest('a[href^="#"]');
+  if(!link||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+  if(link.closest('[hidden]'))return;
+  event.preventDefault();
+  // Explicit scrolling also handles clicking the same fragment a second time.
+  navigateToSection(link.getAttribute('href'),{focus:true,smooth:true});
+});
+window.addEventListener('hashchange',()=>navigateToSection(location.hash,{replace:true}));
+
 function applyRole(){
   const guest=role==='guest',user=role==='user',admin=role==='admin';
   document.body.classList.toggle('guest-mode',guest);document.body.classList.toggle('user-mode',user);$('#guestBanner').hidden=!guest;
@@ -90,7 +131,7 @@ async function load(resetSettings=false){
   const last=$('#reportDate').value,days=[...new Set(state.rows.map(r=>r.date))].sort().reverse();$('#reportDate').replaceChildren(...days.map(d=>{const o=el('option',d);o.value=d;return o;}));if(days.includes(last))$('#reportDate').value=last;
   await renderDay();selectMetric(selectedMetric);
 }
-async function enter(){ $('#login').hidden=true;$('#workspace').hidden=false;await load(true);applyRole(); }
+async function enter(){ $('#login').hidden=true;$('#workspace').hidden=false;await load(true);applyRole();requestAnimationFrame(()=>navigateToSection(location.hash||'#overview',{replace:true})); }
 loginForm.addEventListener('submit',async e=>{e.preventDefault();const username=usernameInput.value.trim(),password=passwordInput.value;if(!username){$('#loginError').textContent='請輸入帳號';usernameInput.focus();return;}const b=e.submitter||loginForm.querySelector('button[type="submit"]');b.disabled=true;try{const r=await api('/api/login',{username,password});csrf=r.csrf;role=r.role||'admin';passwordInput.value='';$('#loginError').textContent='';await enter();}catch(err){$('#loginError').textContent=err.message;}finally{b.disabled=false;}});
 $('#logout').onclick=()=>busy($('#logout'),async()=>{await api('/api/logout',{});location.reload();});
 $('#refresh').onclick=()=>busy($('#refresh'),()=>load(false));$('#reportDate').onchange=()=>renderDay().catch(e=>notify(e.message,true));

@@ -219,7 +219,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'4.0.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'4.0.1-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -329,7 +329,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
           const b=await jsonBody(req);if(b?.confirm!==true)throw new InputError('需要明確確認測試發送');
           const recent=await store.db.prepare("SELECT created_at FROM deliveries WHERE id LIKE 'test:%' ORDER BY created_at DESC LIMIT 1").get();
           if(recent&&clock().getTime()-Date.parse(recent.created_at)<60000)throw new InputError('測試訊息每分鐘最多一則',429);
-          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 4.0.0\nLINE 連線測試成功。這則訊息不含健康資料。'));
+          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 4.0.1\nLINE 連線測試成功。這則訊息不含健康資料。'));
         }
         if(path==='/api/report/send'&&method==='POST'){
           const b=await jsonBody(req);if(b?.confirm!==true||!isDate(b.date))throw new InputError('需要確認發送及有效日期');

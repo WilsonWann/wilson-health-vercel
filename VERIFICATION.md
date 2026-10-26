@@ -1,51 +1,46 @@
-# 驗證紀錄
+# Wilson 健康日報 4.0.0 — 驗證紀錄
 
-日期：2026-10-25；執行環境：Node.js 22.16.0（部署設定為 24.x）。
+## 已執行的自動測試
 
-已實際執行：
-- npm test：100 tests，100 pass，0 fail。
-- npm run build / check：JavaScript 語法檢查通過。
-- 原有 56 項本地測試保留並改為非同步 Store 介面。
-- 新增 Vercel 路由、已解析的 body、4 MB 程式內限制、遠端資料庫必填、Cron GET 驗證與停用保護、固定排程欄位。
-- 2.3.0：`Automation-Aggregation` 改為診斷資訊，不再阻擋匯入；支援部分成功匯入，壞資料以 rejected/warnings 回報，其他有效資料照常寫入。
-- 2.6.3：登入改為帳號＋密碼；新增 Guest 後端唯讀角色與獨立 Mock Data；Guest 無法取得私人健康資料、LINE 設定、備份、操作紀錄或執行寫入/發送/排程；既有 sessions schema 自動補 role 欄位。
-- 2.5.0：每日指標卡片改為可點擊/鍵盤操作，選取後動態切換趨勢圖與區間摘要；身體測量只繪製實際量測點。
-- 2.4.0：新增身高、體重與 BMI；支援身高/體重單位正規化、同日採較晚量測，以及在儀表板與 LINE 日報沿用截至該日最近一次身體量測。
-- 兩個獨立 createApp 連到同一本地測試 SQLite：登入狀態、數據可共享，日期發送鎖只允許一次模擬推播。
-- 登入限制跨 instance 保存；失敗批次 rollback；重傳不加總。
+- `npm test`: 107 tests passed, 0 failed（最終打包前再次執行）
+- `npm run check`: JavaScript / project checks passed（最終打包前再次執行）
 
-限制：
-- 測試資料庫是實際本機 SQLite，透過與雲端相同的 async execute/batch Store 介面，並非真實 Turso 網路連線。
-- LINE 是 fetch 模擬，沒有實際發送訊息。
-- 此環境無法解析 npm registry 網址，沒有在此安裝/執行遠端 @libsql/client 0.18.0；Vercel 或使用者須 npm install。沒有捏造 package-lock.json。
-- 沒有 Vercel 帳號部署權限，因此未執行真實 vercel build/deploy，未提供已上線網址。
-- 沒有執行真實瀏覽器視覺驗收；已以 UI 靜態回歸測試驗證帳號欄位、Guest disabled 樣式、互動卡片與日期下拉箭頭定位。
-- 附件不包含 .env、真實健康樣本、資料庫、LINE 憑證或舊網站服務金鑰。
+## 4.0.0 新增驗收
 
-- 2.6.3：移除既有 sessions 的啟動期 ALTER TABLE migration，改用 sessions_v2；新增 startup_error 安全診斷。
+- LINE authorization URL 指定 `initial_amr_display=lineqr`、`switch_amr=false`、`disable_auto_login=true`。
+- LINE member callback 在後端 exchange authorization code 並 verify ID token + nonce。
+- 會員登入要求 verified `amr` 包含 `lineqr`；非 QR authentication 被拒絕。
+- 第一次 LINE QR Login 自動建立 `role=user` 會員，不再查「是否綁 admin」。
+- 會員自動建立自己的 64-char ingest token；DB 以 SHA-256 hash 做 lookup，明文以 APP_KEY 加密保存供本人取回。
+- `/api/ingest` 依 token owner 寫入該 user 的 `user_samples_v4`。
+- 兩位模擬 LINE 會員取得不同 ingest token：A 上傳 1111.1 步、B 上傳 2222.2 步；A/B 的 `/api/state` 僅能看到自己的值。
+- 前端沒有 user selector；會員資料查詢 owner 來自 HttpOnly session，而非 query/body。
+- `admin` 仍只由帳號密碼登入；admin LINE recipient binding 不授予 admin LINE Login。
+- Guest 仍只能取得 Mock Data 與唯讀 UI。
+- `/api/me/sync-config` 只回傳當前會員自己的 ingest endpoint/token。
+- 會員可 rotate 自己的 token；舊 token 失效。
+- 會員手動 LINE 報告使用自己的 `line_user_id` 與自己的 health rows。
+- 舊 admin LINE 收件人首次以會員登入時，可 copy legacy samples 到會員 store，避免 Wilson 現有資料中斷。
 
-- Guest password is optional; empty password login is covered by regression tests.
+## 保留的回歸測試
 
+- 小數步數、重送不累加、部分日資料、Days aggregation 診斷。
+- Valid rows partial-ingest；invalid rows 只 warning/rejected。
+- Sleep / heart rate / resting heart rate / active energy / exercise time。
+- Height / weight / BMI 單位正規化與 latest-known carry-forward。
+- LINE admin recipient binding、Messaging API mocked push。
+- Guest privacy / 403 enforcement。
+- 操作紀錄獨立 `/logs`，每頁 10 筆、admin only。
+- Vercel route adapter、4 MB app payload limit、Cron auth。
+- Turso-compatible async store、sessions、login limiter、atomic delivery locks。
 
-- 2.6.3: verified passwordless guest submit is not blocked by native HTML required validation.
+## 尚未在此執行的真實外部驗收
 
-- 2.7.0：新增 LINE Login QR 收件人綁定回歸測試；驗證 token-only LINE 設定、短效 state/nonce、authorization URL、callback token exchange、ID token verify、friendship status 與收件人 User ID 自動寫回。
-- QR/LINE Login 測試使用 fetch mock，沒有連真實 LINE 平台；正式部署仍需設定真實 LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET 與 Callback URL。
+- 測試使用 mock LINE endpoints，沒有在本次打包環境用真實 LINE 帳號完成 OAuth/Push。
+- 本地測試 DB 使用 SQLite-compatible async adapter，不等同真實 Turso network round-trip。
+- 沒有替使用者實際執行 Vercel production deployment。
+- 500 人的「每人每日/週報批次 scheduler」尚未實作；4.0.0 的會員功能已完成登入、隔離、ingest token 與個人手動發送。
 
-## 3.1.0 LINE Login QR
+## 秘密值
 
-- 帳號密碼登入回歸保持通過。
-- LINE Login QR start 產生 server-side SVG QR 與短效 state/nonce/poll secret。
-- 未綁定 LINE userId 經 callback 驗證後仍不能取得私人 Session。
-- admin 帳密登入後可用 QR 綁定 LINE userId；之後相同 LINE userId 可完成 QR 登入並取得 admin Session。
-- Messaging API token 由 LINE_CHANNEL_ACCESS_TOKEN 後端變數讀取；前端 HTML/JS 不包含 token 輸入欄位。
-- QR encoder vendored in-repo；不向第三方 QR 服務傳送 OAuth URL。
-
-- `npm test`: 102 tests passed, 0 failed.
-- LINE bind now requires friendship confirmation, Messaging API profile visibility, and a successful binding test push.
-
-## 3.1.0 操作紀錄頁
-
-- 操作紀錄移至 `/logs`，主 Dashboard 不再夾帶 events。
-- 每頁固定 10 筆，支援上一頁／下一頁。
-- `/api/events` 僅允許 admin session。
+交付 ZIP 不包含 `.env`、Channel Access Token、LINE Channel Secret、Turso token、真實健康資料或資料庫。

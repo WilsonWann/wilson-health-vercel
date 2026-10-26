@@ -4,10 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, createHash, timingSafeEqual, scryptSync } from 'node:crypto';
 import { InputError,parseHealth,isDate,shiftDate,taipeiDate,taipeiParts,report,rawTotal,BODY_METRIC_NAMES } from './health.mjs';
 import { openStore } from './store.mjs';
-import { createRequire } from 'node:module';
-const require=createRequire(import.meta.url);
-const QRCode=require('./vendor/QRCode/index.js');
-const QRErrorCorrectLevel=require('./vendor/QRCode/QRErrorCorrectLevel.js');
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const eq=(a,b)=>typeof a==='string'&&typeof b==='string'&&timingSafeEqual(Buffer.from(hash(a)),Buffer.from(hash(b)));
 const SESSION_TTL=8*3600*1000;
@@ -59,23 +55,34 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
   async function publicSettings(){
     const s=await store.settings(),c=await lineContext();return {displayName:s.display_name,autoSend:!!s.auto_send,reportTime:s.report_time,lineConfigured:!!c.token,lineVerified:!!s.line_verified,userId:c.userId||'',maskedUserId:maskUserId(c.userId),recipientConfigured:/^U[0-9a-f]{32}$/.test(c.userId||''),lineLoginConfigured:!!(config.lineLoginChannelId&&config.lineLoginChannelSecret),lineTokenFromEnv:!!config.lineChannelAccessToken,ingestPath:'/api/ingest',fixedReportTime:config.vercel?'09:00':null};
   }
+  async function userPublicSettings(userId){
+    const user=await store.userById(userId);if(!user)throw new InputError('找不到使用者',404);
+    const pref=await store.userReportSettings(userId);
+    return {displayName:user.display_name||'LINE 使用者',autoSend:!!pref.daily_enabled,reportTime:pref.daily_time||'09:00',lineConfigured:!!config.lineChannelAccessToken,lineVerified:!!config.lineChannelAccessToken,userId:user.line_user_id,maskedUserId:maskUserId(user.line_user_id),recipientConfigured:true,lineLoginConfigured:lineLoginReady(),lineTokenFromEnv:!!config.lineChannelAccessToken,friendFlag:!!user.friend_flag,ingestPath:'/api/ingest',fixedReportTime:null};
+  }
+  async function rowsForUserReport(userId,day){
+    const dailyRows=await store.userSamples(userId,day,day),present=new Set(dailyRows.map(r=>r.metric));
+    const latest=await store.userLatestMetrics(userId,BODY_METRIC_NAMES,day);
+    return dailyRows.concat(latest.filter(r=>!present.has(r.metric)).map(r=>({...r,date:day,carried_from:r.date})));
+  }
   function origin(req){return config.origin || `http://${req.headers.host}`;}
   function checkOrigin(req){if(req.headers.origin && req.headers.origin!==origin(req))throw new InputError('拒絕跨站請求',403);}
   async function session(req){
     const value=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('wh2='))?.slice(4);
     if(!value)return null;
-    const s=await store.db.prepare('SELECT * FROM sessions_v2 WHERE hash=? AND expires>?').get(hash(value),clock().getTime());return s||null;
+    const s=await store.db.prepare('SELECT * FROM sessions_v4 WHERE hash=? AND expires>?').get(hash(value),clock().getTime());return s||null;
   }
   async function requireSession(req,write=false){
     const s=await session(req);if(!s)throw new InputError('請先登入',401);
     if(write){checkOrigin(req);if(!eq(req.headers['x-csrf-token'],s.csrf))throw new InputError('驗證已過期，請重新登入',403);}return s;
   }
   async function requireAdminSession(req,write=false){const s=await requireSession(req,write);if(s.role!=='admin')throw new InputError('Guest 為唯讀展示模式，無權執行此操作',403);return s;}
-  async function issueSession(role){
+  async function issueSession(role,{userId=null,username=null}={}){
     const now=clock().getTime(),token=randomBytes(32).toString('hex'),csrf=randomBytes(24).toString('hex');
-    await store.db.prepare('DELETE FROM sessions_v2 WHERE expires<?').run(now);
-    await store.db.prepare('INSERT INTO sessions_v2(hash,csrf,expires,role) VALUES(?,?,?,?)').run(hash(token),csrf,now+SESSION_TTL,role);
-    return {token,csrf,role,username:role==='guest'?guestUsername:adminUsername};
+    await store.db.prepare('DELETE FROM sessions_v4 WHERE expires<?').run(now);
+    const resolvedUsername=username||(role==='guest'?guestUsername:role==='admin'?adminUsername:'LINE user');
+    await store.db.prepare('INSERT INTO sessions_v4(hash,csrf,expires,role,user_id,username) VALUES(?,?,?,?,?,?)').run(hash(token),csrf,now+SESSION_TTL,role,userId,resolvedUsername);
+    return {token,csrf,role,userId,username:resolvedUsername};
   }
   const sessionCookie=token=>`wh2=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${config.production?'; Secure':''}`;
   async function jsonBody(req){
@@ -111,63 +118,52 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(!lineLoginReady())throw new InputError('請先設定 LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET',409);
     if(!['login','bind'].includes(purpose))throw new InputError('LINE Login 用途錯誤',400);
     const state=randomBytes(24).toString('hex'),nonce=randomBytes(24).toString('hex'),pollToken=randomBytes(32).toString('hex'),now=clock(),expires=now.getTime()+LINE_LINK_TTL,redirect=callbackUrl(req);
-    await store.createLineAuthChallenge({state,nonce,purpose,sessionHash,pollHash:hash(pollToken),expires,createdAt:now.toISOString()});
-    const q=new URLSearchParams({response_type:'code',client_id:String(config.lineLoginChannelId),redirect_uri:redirect,state,scope:'openid profile',nonce,bot_prompt:'aggressive',disable_auto_login:'true'});
+    if(purpose==='login')await store.createLineUserChallenge({state,nonce,purpose,pollHash:hash(pollToken),expires,createdAt:now.toISOString()});
+    else await store.createLineAuthChallenge({state,nonce,purpose,sessionHash,pollHash:hash(pollToken),expires,createdAt:now.toISOString()});
+    const q=new URLSearchParams({response_type:'code',client_id:String(config.lineLoginChannelId),redirect_uri:redirect,state,scope:'openid profile',nonce,bot_prompt:'aggressive',disable_auto_login:'true',initial_amr_display:'lineqr',switch_amr:'false'});
     const authorizeUrl='https://access.line.me/oauth2/v2.1/authorize?'+q.toString();
-    const qr=new QRCode(-1,QRErrorCorrectLevel.M);qr.addData(authorizeUrl);qr.make();const n=qr.getModuleCount(),pad=4,size=n+pad*2,rects=[];for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(qr.isDark(y,x))rects.push(`<rect x="${x+pad}" y="${y+pad}" width="1" height="1"/>`);const qrSvg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" role="img" aria-label="LINE Login QR Code"><rect width="100%" height="100%" fill="white"/><g fill="#172d35">${rects.join('')}</g></svg>`;
-    return {state,pollToken,authorizeUrl,qrSvg,expiresAt:new Date(expires).toISOString()};
+    return {state,pollToken,authorizeUrl,expiresAt:new Date(expires).toISOString()};
   }
   async function finishLineAuth(req,url,res){
     const state=url.searchParams.get('state')||'',code=url.searchParams.get('code')||'',oauthError=url.searchParams.get('error');
-    const challenge=await store.lineAuthChallenge(state);
-    const isBind=challenge?.purpose==='bind';
+    const userChallenge=await store.lineUserChallenge(state),legacyChallenge=userChallenge?null:await store.lineAuthChallenge(state),challenge=userChallenge||legacyChallenge,isBind=legacyChallenge?.purpose==='bind';
     const page=(ok,title,message)=>{res.writeHead(ok?200:400,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f5f8f7;color:#172d35;padding:36px;line-height:1.7"><main style="max-width:520px;margin:auto;background:white;border:1px solid #dde7e5;border-radius:16px;padding:28px"><h1 style="font-size:26px">${title}</h1><p>${message}</p><p style="color:#677d82">可以關閉此頁，回到健康日報。</p></main></body>`);};
     if(!challenge||challenge.status!=='pending'||challenge.expires<=clock().getTime())return page(false,'LINE 授權已失效','請回到健康日報重新產生 QR Code。');
-    if(oauthError||!code){await store.failLineAuthChallenge(state,'使用者取消或 LINE 未回傳授權碼');return page(false,'LINE 授權未完成','授權已取消，請回到健康日報重試。');}
+    const fail=async message=>{if(userChallenge)await store.failLineUserChallenge(state,message);else await store.failLineAuthChallenge(state,message);};
+    if(oauthError||!code){await fail('使用者取消或 LINE 未回傳授權碼');return page(false,'LINE 授權未完成','授權已取消，請回到健康日報重試。');}
     try{
       const redirect=callbackUrl(req);
       const token=await lineForm('https://api.line.me/oauth2/v2.1/token',{grant_type:'authorization_code',code,redirect_uri:redirect,client_id:String(config.lineLoginChannelId),client_secret:config.lineLoginChannelSecret});
       if(!token.id_token||!token.access_token)throw new InputError('LINE Login 沒有回傳必要憑證',502);
       const verified=await lineForm('https://api.line.me/oauth2/v2.1/verify',{id_token:token.id_token,client_id:String(config.lineLoginChannelId),nonce:challenge.nonce});
-      const userId=verified.sub||'';if(!/^U[0-9a-f]{32}$/.test(userId))throw new InputError('LINE Login 沒有回傳有效 User ID',502);
-      let friendFlag=null;
-      try{
-        const fr=await fetcher('https://api.line.me/friendship/v1/status',{headers:{Authorization:`Bearer ${token.access_token}`},signal:AbortSignal.timeout(12000)});
-        if(!fr.ok)throw new InputError(`無法確認 LINE 官方帳號好友狀態（HTTP ${fr.status}）`,502);
-        friendFlag=!!(await fr.json()).friendFlag;
-      }catch(e){if(e instanceof InputError)throw e;throw new InputError('無法確認 LINE 官方帳號好友狀態；請確認 LINE Login Channel 已連結同一個官方帳號',502);}
-      if(isBind){
-        const auth=challenge.session_hash?await store.db.prepare('SELECT * FROM sessions_v2 WHERE hash=? AND expires>?').get(challenge.session_hash,clock().getTime()):null;
-        if(!auth||auth.role!=='admin')throw new InputError('原登入工作階段已失效，請重新以管理者帳密登入後再綁定',401);
-        if(friendFlag!==true){
-          await store.failLineAuthChallenge(state,'請先加入 LINE 官方帳號好友，再重新掃描 QR Code 綁定');
-          await store.event('line_bind_rejected',`${verified.name||'LINE 使用者'} · 尚未加入官方帳號好友`,clock().toISOString());
-          return page(false,'尚未加入官方帳號好友','LINE Login 已完成，但你尚未加入「健康日報」官方帳號好友。請先完成加好友，再回到健康日報重新掃描 QR Code。');
-        }
-        const c=await credentials();
-        let profileRes;try{profileRes=await fetcher(`https://api.line.me/v2/bot/profile/${encodeURIComponent(userId)}`,{headers:{Authorization:`Bearer ${c.token}`},signal:AbortSignal.timeout(12000)});}catch{throw new InputError('無法以 Messaging API 驗證這個 LINE 收件人',502);}
-        if(!profileRes.ok){
-          await store.failLineAuthChallenge(state,'LINE Login 與 Messaging API 收件人不一致，或尚未加入目前官方帳號好友');
-          throw new InputError('LINE Login 與 Messaging API 無法辨識同一個收件人；請確認兩個 Channel 位於同一 Provider、已連結同一官方帳號，且使用者已加好友',409);
-        }
-        const welcomeText='✅ LINE 綁定成功\n之後健康日報／週報會傳送到這個 LINE 帳號。';
-        let pushRes;try{pushRes=await fetcher('https://api.line.me/v2/bot/message/push',{method:'POST',headers:{Authorization:`Bearer ${c.token}`,'Content-Type':'application/json','X-Line-Retry-Key':randomUUID()},body:JSON.stringify({to:userId,messages:[{type:'text',text:welcomeText}]}),signal:AbortSignal.timeout(12000)});}catch{throw new InputError('LINE 收件人驗證成功，但綁定測試訊息發送失敗；請稍後重試',502);}
-        if(!pushRes.ok){
-          await store.failLineAuthChallenge(state,`LINE 綁定測試訊息發送失敗（HTTP ${pushRes.status}）`);
-          throw new InputError(`LINE 綁定測試訊息發送失敗（HTTP ${pushRes.status}）`,502);
-        }
-        await store.bindLineAccount({account:adminUsername,role:'admin',userId,displayName:verified.name||'',linkedAt:clock().toISOString()});
-        await store.completeLineAuthChallenge(state,{userId,displayName:verified.name||'',friendFlag:true,account:adminUsername,role:'admin'});
-        await store.db.prepare('UPDATE settings SET line_verified=1 WHERE id=1').run();
-        await store.event('line_account_bound',`${verified.name||'LINE 使用者'} · ${maskUserId(userId)} · 好友與測試訊息皆已確認`,clock().toISOString());
-        return page(true,'LINE 綁定完成','已確認加入官方帳號好友，並成功送出一則綁定測試訊息。之後可直接使用 LINE QR Code 登入，並作為日報收件人。');
+      const lineUserId=verified.sub||'';if(!/^U[0-9a-f]{32}$/.test(lineUserId))throw new InputError('LINE Login 沒有回傳有效 User ID',502);
+      if(userChallenge&&(!Array.isArray(verified.amr)||!verified.amr.includes('lineqr')))throw new InputError('請使用 LINE QR Code 完成登入',403);
+      let friendFlag=false;
+      try{const fr=await fetcher('https://api.line.me/friendship/v1/status',{headers:{Authorization:`Bearer ${token.access_token}`},signal:AbortSignal.timeout(12000)});if(fr.ok)friendFlag=!!(await fr.json()).friendFlag;}catch{}
+      if(userChallenge){
+        const user=await store.upsertLineUser({lineUserId,displayName:verified.name||'',pictureUrl:verified.picture||'',friendFlag,now:clock().toISOString()});
+        const adminBinding=await store.accountLineBinding(adminUsername);if(adminBinding?.user_id===lineUserId)await store.copyLegacySamplesToUser(user.id,clock().toISOString());
+        await store.completeLineUserChallenge(state,{lineUserId,internalUserId:user.id,displayName:verified.name||'',friendFlag,role:'user'});
+        await store.event('line_user_login',`${verified.name||'LINE 使用者'} · ${maskUserId(lineUserId)} · backend verified`,clock().toISOString());
+        return page(true,'LINE Login 已驗證','身分已由 LINE 後端驗證。桌面瀏覽器會自動登入你的健康資料。');
       }
-      const binding=await store.accountLineBindingByUserId(userId);
-      if(!binding){await store.failLineAuthChallenge(state,'此 LINE 帳號尚未綁定帳號');return page(false,'LINE 尚未綁定','請先以帳號密碼登入，再到 LINE 連線區掃 QR Code 綁定一次。');}
-      await store.completeLineAuthChallenge(state,{userId,displayName:verified.name||binding.display_name||'',friendFlag,account:binding.account,role:binding.role});
-      await store.event('line_login_authorized',`${verified.name||binding.display_name||'LINE 使用者'} · ${binding.account}`,clock().toISOString());
-      return page(true,'LINE Login 已授權','桌面瀏覽器會自動完成登入。');
-    }catch(e){await store.failLineAuthChallenge(state,e instanceof Error?e.message:String(e));return page(false,isBind?'LINE 綁定失敗':'LINE Login 失敗','LINE 授權或驗證失敗，請回到健康日報重試。');}
+      if(isBind){
+        const auth=challenge.session_hash?await store.db.prepare('SELECT * FROM sessions_v4 WHERE hash=? AND expires>?').get(challenge.session_hash,clock().getTime()):null;
+        if(!auth||auth.role!=='admin')throw new InputError('原登入工作階段已失效，請重新以管理者帳密登入後再綁定',401);
+        if(friendFlag!==true){await store.failLineAuthChallenge(state,'請先加入 LINE 官方帳號好友，再重新掃描 QR Code 綁定');return page(false,'尚未加入官方帳號好友','請先完成加好友，再回到健康日報重新掃描 QR Code。');}
+        const c=await credentials();const profileRes=await fetcher(`https://api.line.me/v2/bot/profile/${encodeURIComponent(lineUserId)}`,{headers:{Authorization:`Bearer ${c.token}`},signal:AbortSignal.timeout(12000)});
+        if(!profileRes.ok)throw new InputError('LINE Login 與 Messaging API 無法辨識同一個收件人',409);
+        const welcomeText='✅ LINE 綁定成功\n之後管理者健康日報會傳送到這個 LINE 帳號。';
+        const pushRes=await fetcher('https://api.line.me/v2/bot/message/push',{method:'POST',headers:{Authorization:`Bearer ${c.token}`,'Content-Type':'application/json','X-Line-Retry-Key':randomUUID()},body:JSON.stringify({to:lineUserId,messages:[{type:'text',text:welcomeText}]}),signal:AbortSignal.timeout(12000)});
+        if(!pushRes.ok)throw new InputError(`LINE 綁定測試訊息發送失敗（HTTP ${pushRes.status}）`,502);
+        await store.bindLineAccount({account:adminUsername,role:'admin',userId:lineUserId,displayName:verified.name||'',linkedAt:clock().toISOString()});
+        await store.completeLineAuthChallenge(state,{userId:lineUserId,displayName:verified.name||'',friendFlag:true,account:adminUsername,role:'admin'});
+        await store.db.prepare('UPDATE settings SET line_verified=1 WHERE id=1').run();
+        await store.event('line_account_bound',`${verified.name||'LINE 使用者'} · ${maskUserId(lineUserId)}`,clock().toISOString());
+        return page(true,'LINE 綁定完成','已成功送出一則綁定測試訊息，並綁定為管理者日報收件人。');
+      }
+      throw new InputError('LINE Login 用途錯誤',400);
+    }catch(e){await fail(e instanceof Error?e.message:String(e));return page(false,isBind?'LINE 綁定失敗':'LINE Login 失敗','LINE 授權或驗證失敗，請回到健康日報重試。');}
   }
   async function verifyLine(){
     const c=await credentials();let r;
@@ -194,6 +190,14 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
       throw new InputError(message,502);
     }
   }
+  async function sendUserMessage(userId,id,text){
+    const user=await store.userById(userId);if(!user)throw new InputError('找不到使用者',404);
+    if(!config.lineChannelAccessToken)throw new InputError('尚未設定 LINE_CHANNEL_ACCESS_TOKEN',409);
+    const deliveryId=`user:${userId}:${id}`,claim=await store.claimDelivery(deliveryId,text,user.line_user_id,clock());if(!claim.row)return claim;
+    const r=await fetcher('https://api.line.me/v2/bot/message/push',{method:'POST',headers:{Authorization:`Bearer ${config.lineChannelAccessToken}`,'Content-Type':'application/json','X-Line-Retry-Key':claim.row.retry_key},body:claim.row.payload,signal:AbortSignal.timeout(12000)});
+    if(!r.ok&&!(r.status===409&&r.headers.get('x-line-accepted-request-id')))throw new InputError(`LINE 尚未確認受理（HTTP ${r.status}）`,502);
+    await store.db.prepare("UPDATE deliveries SET status='accepted',error=NULL WHERE id=?").run(deliveryId);return {status:'accepted'};
+  }
   async function rowsForReport(day){
     const dailyRows=await store.samples(day,day),present=new Set(dailyRows.map(r=>r.metric));
     const latest=await store.latestMetrics(BODY_METRIC_NAMES,day);
@@ -215,7 +219,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
     if(config.production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname; const method=req.method;
-      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'3.1.0-vercel'});
+      if(path==='/healthz'&&method==='GET')return result(res,200,{ok:true,version:'4.0.0-vercel'});
       if(path==='/api/login'&&method==='POST'){
         checkOrigin(req);const now=clock().getTime();
         const ip=config.vercel?(req.headers['x-vercel-forwarded-for']||req.socket.remoteAddress||'unknown'):(req.socket.remoteAddress||'unknown');
@@ -233,27 +237,28 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         checkOrigin(req);await jsonBody(req);return result(res,200,await startLineAuth(req,{purpose:'login'}));
       }
       if(path==='/api/line/login/status'&&method==='POST'){
-        checkOrigin(req);const b=await jsonBody(req),row=await store.lineAuthChallenge(String(b?.state||''));
+        checkOrigin(req);const b=await jsonBody(req),row=await store.lineUserChallenge(String(b?.state||''));
         if(!row||row.purpose!=='login')throw new InputError('找不到這次 LINE Login',404);
         const supplied=hash(String(b?.pollToken||''));if(typeof row.poll_hash!=='string'||row.poll_hash.length!==supplied.length||!timingSafeEqual(Buffer.from(row.poll_hash),Buffer.from(supplied)))throw new InputError('LINE Login 驗證失敗',403);
         if(row.status==='pending'&&row.expires<=clock().getTime())return result(res,200,{status:'expired'});
         if(row.status==='failed')return result(res,200,{status:'failed',error:row.error||'LINE Login 失敗'});
         if(row.status==='complete'){
-          const issued=await issueSession(row.role||'admin');await store.db.prepare("UPDATE line_auth_challenges_v3 SET status='consumed' WHERE state=?").run(row.state);
-          return result(res,200,{status:'complete',csrf:issued.csrf,role:issued.role,username:row.account||issued.username,displayName:row.display_name||''},{'Set-Cookie':sessionCookie(issued.token)});
+          const issued=await issueSession('user',{userId:row.internal_user_id,username:row.display_name||'LINE user'});await store.db.prepare("UPDATE line_auth_challenges_v4 SET status='consumed' WHERE state=?").run(row.state);
+          return result(res,200,{status:'complete',csrf:issued.csrf,role:'user',username:issued.username,displayName:row.display_name||''},{'Set-Cookie':sessionCookie(issued.token)});
         }
-        if(row.status==='consumed')return result(res,200,{status:'consumed'});
-        return result(res,200,{status:row.status});
+        if(row.status==='consumed')return result(res,200,{status:'consumed'});return result(res,200,{status:row.status});
       }
-      if(path==='/api/session'&&method==='GET'){const s=await session(req);return result(res,200,s?{authenticated:true,csrf:s.csrf,role:s.role||'admin',username:(s.role||'admin')==='guest'?guestUsername:adminUsername}:{authenticated:false});}
-      if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions_v2 WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
+      if(path==='/api/session'&&method==='GET'){const s=await session(req);return result(res,200,s?{authenticated:true,csrf:s.csrf,role:s.role||'admin',username:s.username||((s.role||'admin')==='guest'?guestUsername:adminUsername),userId:s.user_id||null}:{authenticated:false});}
+      if(path==='/api/logout'&&method==='POST'){const s=await requireSession(req,true);await store.db.prepare('DELETE FROM sessions_v4 WHERE hash=?').run(s.hash);return result(res,200,{ok:true},{'Set-Cookie':`wh2=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${config.production?'; Secure':''}`});}
       if((path==='/api/line/auth/callback'||path==='/api/line/link/callback')&&method==='GET')return await finishLineAuth(req,url,res);
       if(path==='/api/ingest'&&method==='POST'){
-        if(!eq(req.headers.authorization,`Bearer ${config.ingestToken}`))throw new InputError('匯入金鑰錯誤',401);
-        const aggregation=req.headers['automation-aggregation'];
-        let payload;
+        const authHeader=String(req.headers.authorization||''),bearer=authHeader.startsWith('Bearer ')?authHeader.slice(7):'';
+        const aggregation=req.headers['automation-aggregation'];let payload;
         try{payload=await jsonBody(req);}catch(e){if(e instanceof InputError)await store.event('ingest_rejected',e.message,clock().toISOString());throw e;}
-        return result(res,200,await doImport(payload,{aggregation}));
+        if(eq(authHeader,`Bearer ${config.ingestToken}`))return result(res,200,await doImport(payload,{aggregation}));
+        const user=await store.userByIngestToken(bearer);if(!user)throw new InputError('匯入金鑰錯誤',401);
+        const parsed=parseHealth(payload);if(aggregation)parsed.aggregation=String(aggregation).slice(0,80);const imported=await store.importUser(user.id,parsed,clock().toISOString());
+        await store.event('user_import',`${user.id.slice(0,8)} · ${JSON.stringify(imported)}`,clock().toISOString());return result(res,200,imported);
       }
       if(path==='/api/cron'&&method==='GET'){
         if(!eq(req.headers.authorization,`Bearer ${config.cronToken}`))throw new InputError('排程金鑰錯誤',401);
@@ -272,6 +277,11 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
           const to=url.searchParams.get('to')||taipeiDate(clock()),from=url.searchParams.get('from')||shiftDate(to,-6);
           if(!isDate(from)||!isDate(to)||from>to||Date.parse(to)-Date.parse(from)>365*86400000)throw new InputError('日期範圍需有效，且一次最多查詢 366 天');
           if((auth.role||'admin')==='guest')return result(res,200,mockState(from,to,clock(),config));
+          if(auth.role==='user'){
+            const user=await store.userById(auth.user_id);if(!user)throw new InputError('找不到使用者',404);
+            const rows=await store.userSamples(user.id,from,to),steps=rows.filter(r=>r.metric==='step_count'),bodyRows=await store.userMetricSamples(user.id,BODY_METRIC_NAMES,to);
+            return result(res,200,{role:'user',mock:false,user:{id:user.id,displayName:user.display_name,lineUserId:maskUserId(user.line_user_id),friendFlag:!!user.friend_flag},settings:await userPublicSettings(user.id),rows,bodyRows,stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,today:taipeiDate(clock()),from,to});
+          }
           const rows=await store.samples(from,to),steps=rows.filter(r=>r.metric==='step_count'),bodyRows=await store.metricSamples(BODY_METRIC_NAMES,to);
           return result(res,200,{role:'admin',mock:false,settings:await publicSettings(),rows,bodyRows,stepsTotal:rawTotal(steps.map(r=>r.value)),stepsDays:steps.length,today:taipeiDate(clock()),from,to});
         }
@@ -283,7 +293,21 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
         if(path==='/api/report/preview'&&method==='GET'){
           const date=url.searchParams.get('date');if(!isDate(date))throw new InputError('日期格式錯誤');
           if((auth.role||'admin')==='guest'){const rows=mockRows(date,date,clock().toISOString());return result(res,200,{text:report(date,rows,'Guest Demo'),mock:true});}
+          if(auth.role==='user'){const user=await store.userById(auth.user_id);return result(res,200,{text:report(date,await rowsForUserReport(user.id,date),user.display_name||'')});}
           return result(res,200,{text:report(date,await rowsForReport(date),(await store.settings()).display_name)});
+        }
+        if(auth.role==='user'){
+          if(path==='/api/me/sync-config'&&method==='GET'){
+            const token=await store.ensureUserIngestToken(auth.user_id,clock().toISOString());return result(res,200,{ingestUrl:origin(req)+'/api/ingest',ingestToken:token.token,last4:token.last4});
+          }
+          if(path==='/api/me/ingest-token/rotate'&&method==='POST'){
+            await jsonBody(req);const token=await store.rotateUserIngestToken(auth.user_id,clock().toISOString());return result(res,200,{ingestUrl:origin(req)+'/api/ingest',ingestToken:token.token,last4:token.last4});
+          }
+          if(path==='/api/report/send'&&method==='POST'){
+            const b=await jsonBody(req);if(b?.confirm!==true||!isDate(b.date))throw new InputError('需要確認發送及有效日期');const user=await store.userById(auth.user_id);
+            return result(res,200,await sendUserMessage(user.id,'daily:'+b.date,report(b.date,await rowsForUserReport(user.id,b.date),user.display_name||'')));
+          }
+          throw new InputError('一般使用者無權存取管理功能',403);
         }
         if((auth.role||'admin')!=='admin')throw new InputError('Guest 為唯讀展示模式，無權存取私人功能',403);
         if(path==='/api/import'&&method==='POST')return result(res,200,await doImport(await jsonBody(req)));
@@ -305,7 +329,7 @@ export async function createApp(config,{fetcher=fetch,clock=()=>new Date(),clien
           const b=await jsonBody(req);if(b?.confirm!==true)throw new InputError('需要明確確認測試發送');
           const recent=await store.db.prepare("SELECT created_at FROM deliveries WHERE id LIKE 'test:%' ORDER BY created_at DESC LIMIT 1").get();
           if(recent&&clock().getTime()-Date.parse(recent.created_at)<60000)throw new InputError('測試訊息每分鐘最多一則',429);
-          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 3.1.0\nLINE 連線測試成功。這則訊息不含健康資料。'));
+          return result(res,200,await sendMessage('test:'+randomUUID(),'⌚ Wilson 健康日報 4.0.0\nLINE 連線測試成功。這則訊息不含健康資料。'));
         }
         if(path==='/api/report/send'&&method==='POST'){
           const b=await jsonBody(req);if(b?.confirm!==true||!isDate(b.date))throw new InputError('需要確認發送及有效日期');

@@ -9,15 +9,23 @@ function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.te
 function notify(text,error=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').classList.toggle('error',error);}
 
 function applyRole(){
-  const guest=role==='guest';document.body.classList.toggle('guest-mode',guest);$('#guestBanner').hidden=!guest;$('#workspaceMode').textContent=guest?'● Guest 展示模式':'● 私人工作區';
-  $('#scheduleBadge').textContent=guest?'Guest Demo · 唯讀':($('#scheduleBadge').textContent||'自動發送未啟用');
-  document.querySelectorAll('[data-admin-only]').forEach(box=>{box.classList.toggle('guest-disabled',guest);box.setAttribute('aria-disabled',String(guest));box.querySelectorAll('input,textarea,button,select').forEach(x=>x.disabled=guest);});
-  const backup=$('#backupLink');if(guest){backup.removeAttribute('href');backup.setAttribute('aria-disabled','true');backup.onclick=e=>e.preventDefault();}else{backup.href='/api/backup';backup.removeAttribute('aria-disabled');backup.onclick=null;}
-  document.querySelectorAll('nav a[href="#import"],nav a[href="#line"],nav a[href="#history"]').forEach(a=>a.classList.toggle('nav-disabled',guest));
+  const guest=role==='guest',user=role==='user',admin=role==='admin';
+  document.body.classList.toggle('guest-mode',guest);document.body.classList.toggle('user-mode',user);$('#guestBanner').hidden=!guest;
+  $('#workspaceMode').textContent=guest?'● Guest 展示模式':user?`● ${state?.user?.displayName||'LINE 會員'} · 私人資料`:'● 管理者工作區';
+  document.querySelectorAll('[data-admin-only]').forEach(box=>{box.hidden=!admin;box.classList.toggle('guest-disabled',!admin);box.setAttribute('aria-disabled',String(!admin));box.querySelectorAll?.('input,textarea,button,select').forEach(x=>x.disabled=!admin);});
+  document.querySelectorAll('[data-user-only]').forEach(box=>{box.hidden=!user;box.setAttribute('aria-disabled',String(!user));});
+  const backup=$('#backupLink');if(!admin){backup.removeAttribute('href');backup.hidden=true;}else{backup.href='/api/backup';backup.hidden=false;}
+  if(guest)$('#scheduleBadge').textContent='Guest Demo · 唯讀';
+  if(user)$('#scheduleBadge').textContent=state?.user?.friendFlag?'LINE 會員 · 可接收個人訊息':'LINE 會員 · 尚未加入官方帳號好友';
 }
 async function api(path,data){const r=await fetch(path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:data===undefined?undefined:JSON.stringify(data)});const v=await r.json();if(!r.ok){if(r.status===401){$('#workspace').hidden=true;$('#login').hidden=false;}throw new Error(v.error||'請求失敗');}return v;}
 async function busy(button,fn){button.disabled=true;try{await fn();}catch(e){notify(e.message,true);}finally{button.disabled=false;}}
 function fillSettings(s){$('#displayName').value=s.displayName;$('#reportTime').value=s.reportTime;$('#autoSend').checked=s.autoSend;$('#lineTokenStatus').textContent=s.lineConfigured?'已由環境變數設定':'尚未設定 LINE_CHANNEL_ACCESS_TOKEN';$('#verifyLine').disabled=role==='guest'||!s.lineConfigured;$('#testLine').disabled=role==='guest'||!s.lineConfigured||!s.recipientConfigured;$('#lineQrLink').disabled=role==='guest'||!s.lineLoginConfigured;$('#lineQrLink').textContent=s.recipientConfigured?'重新用 LINE Login 綁定':'LINE Login 綁定';$('#lineRecipientName').textContent=s.recipientConfigured?'已綁定 LINE 收件人':'尚未綁定';$('#lineRecipientMeta').textContent=s.recipientConfigured?`${s.maskedUserId} · 可用測試訊息確認收件`:(s.lineLoginConfigured?'掃 QR Code 綁定 LINE 帳號。':'尚未設定 LINE Login Channel ID / Secret');$('#lineQrLink').closest('.line-link-box').classList.toggle('bound',!!s.recipientConfigured);$('#lineBadge').textContent=role==='guest'?'Guest 模式 · 不提供':s.lineVerified&&s.recipientConfigured?'權杖已驗證 · LINE 已綁定':s.lineVerified?'權杖已驗證 · 尚未綁定 LINE':s.lineConfigured?'權杖已設定，尚未驗證':'尚未設定';$('#scheduleBadge').textContent=role==='guest'?'Guest Demo · 唯讀':s.autoSend?`每日 ${s.reportTime} 後排程發送`:'自動發送未啟用';$('#ingestUrl').value=role==='guest'?'':location.origin+s.ingestPath;$('#reportTime').disabled=role==='guest'||!!s.fixedReportTime;if(s.fixedReportTime)$('#reportTime').value=s.fixedReportTime;}
+async function fillUserSync(){
+  if(role!=='user')return;const cfg=await api('/api/me/sync-config');
+  $('#userIngestUrl').value=cfg.ingestUrl;$('#userIngestToken').value=cfg.ingestToken;$('#userIngestToken').type='password';$('#toggleUserToken').textContent='顯示金鑰';
+  $('#userLineStatus').textContent=state?.user?.friendFlag?'已加入 LINE 官方帳號，可作為日報／週報收件人。':'LINE Login 已完成，但尚未確認加入官方帳號好友；可登入查看資料，但主動推播可能無法送達。';
+}
 function metricRows(metric){
   const source=bodyMetrics.has(metric)?(state.bodyRows||[]):state.rows;
   return source.filter(r=>r.metric===metric&&r.date<=state.to&&(bodyMetrics.has(metric)||r.date>=state.from));
@@ -78,7 +86,7 @@ async function renderDay(){
 async function load(resetSettings=false){
   const params=new URLSearchParams();if($('#from').value)params.set('from',$('#from').value);if($('#to').value)params.set('to',$('#to').value);
   state=await api('/api/state?'+params);role=state.role||role;$('#from').value=state.from;$('#to').value=state.to;
-  if(resetSettings)fillSettings(state.settings);else{$('#scheduleBadge').textContent=role==='guest'?'Guest Demo · 唯讀':state.settings.autoSend?`每日 ${state.settings.reportTime} 後排程發送`:'自動發送未啟用';}applyRole();
+  if(resetSettings&&role==='admin')fillSettings(state.settings);else if(role==='admin'){$('#scheduleBadge').textContent=state.settings.autoSend?`每日 ${state.settings.reportTime} 後排程發送`:'自動發送未啟用';}applyRole();if(role==='user')await fillUserSync();
   const last=$('#reportDate').value,days=[...new Set(state.rows.map(r=>r.date))].sort().reverse();$('#reportDate').replaceChildren(...days.map(d=>{const o=el('option',d);o.value=d;return o;}));if(days.includes(last))$('#reportDate').value=last;
   await renderDay();selectMetric(selectedMetric);
 }
@@ -91,7 +99,6 @@ $('#importButton').onclick=()=>busy($('#importButton'),async()=>{let data;try{da
 $('#settingsForm').onsubmit=e=>{e.preventDefault();busy(e.submitter,async()=>{const r=await api('/api/settings',{displayName:$('#displayName').value,reportTime:$('#reportTime').value,autoSend:$('#autoSend').checked});fillSettings(r.settings);notify('報告設定已儲存。');await load(false);});};
 
 let lineLinkTimer=null,lineLoginTimer=null;
-function renderQr(target,svg){target.replaceChildren();const box=document.createElement('div');box.className='qr-svg';box.innerHTML=svg;target.append(box);}
 async function pollLineBind(stateId,expiresAt){
   clearInterval(lineLinkTimer);const end=Date.parse(expiresAt||'');
   async function check(){
@@ -104,13 +111,13 @@ async function pollLineBind(stateId,expiresAt){
   }
   await check();lineLinkTimer=setInterval(check,1800);
 }
-$('#lineQrLink').onclick=()=>busy($('#lineQrLink'),async()=>{const r=await api('/api/line/bind/start',{});$('#bindQrPanel').hidden=false;renderQr($('#bindQr'),r.qrSvg);$('#lineLinkStatus').textContent='請用手機 LINE 掃描 QR Code 完成綁定。';await pollLineBind(r.state,r.expiresAt);});
+$('#lineQrLink').onclick=()=>{const popup=window.open('','lineBind','popup,width=480,height=720');busy($('#lineQrLink'),async()=>{const r=await api('/api/line/bind/start',{});$('#bindQrPanel').hidden=false;$('#openLineBindLink').href=r.authorizeUrl;$('#openLineBindLink').hidden=false;if(popup)popup.location.href=r.authorizeUrl;$('#lineLinkStatus').textContent=popup?'LINE 官方 QR Login 已開啟，請用手機 LINE 掃描。':'瀏覽器擋住彈出視窗，請點下方連結開啟 LINE 官方 QR Login。';await pollLineBind(r.state,r.expiresAt);});};
 
 async function pollLineLogin(stateId,pollToken,expiresAt){
   clearInterval(lineLoginTimer);const end=Date.parse(expiresAt||'');
   async function check(){
     try{const r=await api('/api/line/login/status',{state:stateId,pollToken});
-      if(r.status==='complete'){clearInterval(lineLoginTimer);csrf=r.csrf;role=r.role||'admin';$('#loginQrStatus').textContent=`LINE Login 成功${r.displayName?'：'+r.displayName:''}`;$('#loginError').textContent='';await enter();return;}
+      if(r.status==='complete'){clearInterval(lineLoginTimer);csrf=r.csrf;role=r.role||'user';$('#loginQrStatus').textContent=`LINE Login 成功${r.displayName?'：'+r.displayName:''}`;$('#loginError').textContent='';await enter();return;}
       if(r.status==='failed'||r.status==='expired'){clearInterval(lineLoginTimer);$('#loginQrStatus').textContent=r.error||'LINE Login 已失效，請重新產生 QR Code。';$('#loginQrStatus').classList.add('error');return;}
       $('#loginQrStatus').textContent='等待手機掃描並完成 LINE Login…';
     }catch(e){clearInterval(lineLoginTimer);$('#loginQrStatus').textContent=e.message;$('#loginQrStatus').classList.add('error');}
@@ -118,9 +125,12 @@ async function pollLineLogin(stateId,pollToken,expiresAt){
   }
   await check();lineLoginTimer=setInterval(check,1800);
 }
-$('#showLineLogin').onclick=()=>busy($('#showLineLogin'),async()=>{const r=await api('/api/line/login/start',{});$('#loginQrPanel').hidden=false;loginForm.hidden=true;$('.login-divider').hidden=true;renderQr($('#loginQr'),r.qrSvg);$('#loginQrStatus').classList.remove('error');$('#loginQrStatus').textContent='請用手機 LINE 掃描 QR Code。';await pollLineLogin(r.state,r.pollToken,r.expiresAt);});
+$('#showLineLogin').onclick=()=>{const popup=window.open('','lineLogin','popup,width=480,height=720');busy($('#showLineLogin'),async()=>{const r=await api('/api/line/login/start',{});$('#loginQrPanel').hidden=false;loginForm.hidden=true;$('.login-divider').hidden=true;$('#openLineLoginLink').href=r.authorizeUrl;$('#openLineLoginLink').hidden=false;if(popup)popup.location.href=r.authorizeUrl;$('#loginQrStatus').classList.remove('error');$('#loginQrStatus').textContent=popup?'LINE 官方 QR Login 已開啟；請用手機 LINE 掃描。':'瀏覽器擋住彈出視窗，請點下方連結開啟 LINE 官方 QR Login。';await pollLineLogin(r.state,r.pollToken,r.expiresAt);});};
 $('#cancelLineLogin').onclick=()=>{clearInterval(lineLoginTimer);$('#loginQrPanel').hidden=true;loginForm.hidden=false;$('.login-divider').hidden=false;$('#showLineLogin').disabled=false;};
 
+$('#toggleUserToken').onclick=()=>{const input=$('#userIngestToken');input.type=input.type==='password'?'text':'password';$('#toggleUserToken').textContent=input.type==='password'?'顯示金鑰':'隱藏金鑰';};
+$('#copyUserIngest').onclick=()=>busy($('#copyUserIngest'),async()=>{const text=`URL: ${$('#userIngestUrl').value}\nAuthorization: Bearer ${$('#userIngestToken').value}\nContent-Type: application/json`;await navigator.clipboard.writeText(text);notify('已複製你的 iPhone 同步設定。');});
+$('#rotateUserToken').onclick=()=>{if(!confirm('重新產生同步金鑰後，舊金鑰會立即失效。確定繼續？'))return;busy($('#rotateUserToken'),async()=>{const r=await api('/api/me/ingest-token/rotate',{});$('#userIngestToken').value=r.ingestToken;$('#userIngestToken').type='password';notify('已重新產生同步金鑰，請同步更新 iPhone 的 Health Auto Export。');});};
 $('#verifyLine').onclick=()=>busy($('#verifyLine'),async()=>{const r=await api('/api/line/verify',{});notify(`${r.name}：${r.message}`);await load(true);});
 $('#testLine').onclick=()=>{if(!confirm('發送一則不含健康資料的 LINE 測試訊息？這會使用一則推播額度。'))return;busy($('#testLine'),async()=>{await api('/api/line/test',{confirm:true});notify('測試訊息已由 LINE API 受理，請確認手機是否收到。');await load(false);});};
 $('#sendReport').onclick=()=>{if(!confirm(`將 ${$('#reportDate').value} 的健康日報傳給已設定的個人 LINE 收件人？`))return;busy($('#sendReport'),async()=>{const r=await api('/api/report/send',{date:$('#reportDate').value,confirm:true});notify(r.status==='accepted'?'日報已由 LINE API 受理。':r.reason==='already_sent'?'這一天已發送，不會重複傳送。':'發送正在處理，沒有重複提交。');await load(false);});};
